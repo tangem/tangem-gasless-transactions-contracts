@@ -1,0 +1,39 @@
+{
+  "name": "tangem-gasless-transactions-contracts",
+  "version": "0.0.1",
+  "description": "EVM smart contracts for Tangem Gasless Transactions",
+  "keywords": [
+    "Tangem",
+    "smart contracts",
+    "gasless",
+    "transactions",
+    "EIP-7702",
+    "cryptocurrency",
+    "EVM",
+    "solidiy"
+  ],
+  "homepage": "https://github.com/tangem-developments/tangem-gasless-transactions-contracts#readme",
+  "bugs": {
+    "url": "https://github.com/tangem-developments/tangem-gasless-transactions-contracts/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tangem-developments/tangem-gasless-transactions-contracts.git"
+  },
+  "license": "MIT",
+  "author": "Tangem",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox-mocha-ethers": "^3.0.2",
+    "@openzeppelin/contracts": "^5.4.0",
+    "@openzeppelin/contracts-upgradeable": "^5.4.0",
+    "@types/node": "^22.19.3",
+    "dotenv": "^17.2.3",
+    "hardhat": "^3.1.2",
+    "typescript": "~5.8.0"
+  }
+}
