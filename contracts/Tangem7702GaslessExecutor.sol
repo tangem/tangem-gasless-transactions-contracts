@@ -78,6 +78,10 @@ contract Tangem7702GaslessExecutor is EIP712 layout at 0x63126cb0ee213fd665c396a
         emit TransactionExecuted(gaslessTx);
     }
 
+    receive() external payable {}
+
+    fallback() external payable {} // TODO do we need it?
+
     function _processFeeTransfer(
         Fee calldata fee,
         address feeReceiver,
