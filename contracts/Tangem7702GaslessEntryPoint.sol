@@ -23,7 +23,7 @@ contract Tangem7702GaslessEntryPoint {
     ) public {
         require(executor.fetchDelegate() == requiredDelegateAddress, "EntryPoint: invalid delegate");
 
-        Tangem7702GaslessExecutor(executor).executeTransaction(
+        Tangem7702GaslessExecutor(payable(executor)).executeTransaction(
             gasslessTx,
             signature,
             feeReceiver,
