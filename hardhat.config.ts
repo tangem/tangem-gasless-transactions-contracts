@@ -13,7 +13,12 @@ task("deploy", "Deploys all the contracts")
 export default defineConfig({
   solidity: {
     version: "0.8.33",
-    settings: { optimizer: { enabled: true, runs: 200 } },
+    settings: { 
+      optimizer: { 
+        enabled: true, 
+        runs: 200 
+      } 
+    },
   },
   networks: {
     ethereum: {

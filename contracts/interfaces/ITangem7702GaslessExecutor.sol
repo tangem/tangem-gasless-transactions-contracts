@@ -23,14 +23,21 @@ interface ITangem7702GaslessExecutor {
     }
 
     error InsufficientFundsForFee(address feeToken, uint256 balance, uint256 maxTokenFee);
-    error ExecutionFailed(address to, uint256 value, bytes data);
+    error ExecutionFailed(address to, uint256 value, bytes4 selector, bytes32 dataHash);
     error MaxFeeExceeded(uint256 feeAmount, uint256 maxTokenFee);
     error FeeTransferGasLimitExceededNotForced(uint256 gasLimit, uint256 gasUsed);
     error InvalidNonce(uint256 expectedNonce, uint256 providedNonce);
     error InvalidSigner(address recoveredSigner, address expectedSigner);
 
-    event TransactionExecuted(GaslessTransaction gaslessTx);
-    event FeeTransferProcessed(address indexed feeReceiver, address feeToken, uint256 feeAmount, uint256 totalGas);
+    event TransactionExecuted(
+        address indexed executor,
+        uint256 indexed nonce,
+        address indexed to,
+        uint256 value,
+        bytes32 dataHash,
+        bytes32 digest
+    );
+    event FeeTransferProcessed(address indexed feeReceiver, address indexed feeToken, uint256 feeAmount, uint256 totalGas);
     event FeeTransferGasLimitExceeded(uint256 gasLimit, uint256 gasUsed);
 
     receive() external payable;

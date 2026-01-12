@@ -57,16 +57,27 @@ contract Tangem7702GaslessExecutor is
         if (balance < gaslessTx.fee.maxTokenFee) {
             revert InsufficientFundsForFee(gaslessTx.fee.feeToken, balance, gaslessTx.fee.maxTokenFee);
         }
-        _verifyGaslessTransaction(gaslessTx, signature);
+        bytes32 structHash = _hashGaslessTransaction(gaslessTx);
+        bytes32 digest = _hashTypedDataV4(structHash);
+        _verifyGaslessTransaction(gaslessTx, signature, digest);
         uint256 startGas = gasleft();
         (bool success, ) = gaslessTx.transaction.to.call{value: gaslessTx.transaction.value}(gaslessTx.transaction.data);
+        bytes32 dataHash = keccak256(gaslessTx.transaction.data);
         if (!success) {
-            revert ExecutionFailed(gaslessTx.transaction.to, gaslessTx.transaction.value, gaslessTx.transaction.data);
+            bytes4 selector = _selector(gaslessTx.transaction.data);
+            revert ExecutionFailed(gaslessTx.transaction.to, gaslessTx.transaction.value, selector, dataHash);
         }
         if (gaslessTx.fee.coinPriceInToken > 0) {
             _processFeeTransfer(gaslessTx.fee, feeReceiver, startGas, forced);
         }
-        emit TransactionExecuted(gaslessTx);
+        emit TransactionExecuted(
+            address(this),
+            gaslessTx.nonce,
+            gaslessTx.transaction.to,
+            gaslessTx.transaction.value,
+            dataHash,
+            digest
+        );
     }
 
     function _processFeeTransfer(
@@ -74,25 +85,27 @@ contract Tangem7702GaslessExecutor is
         address feeReceiver,
         uint256 startGas,
         bool forced
-    ) 
-        private 
+    )
+        private
     {
-        uint256 gasBeforeFeeTransfer = gasleft();
-        uint256 totalGas = startGas - gasBeforeFeeTransfer + fee.feeTransferGasLimit + fee.baseGas;
+        uint256 gasAfterUserCall = gasleft();
+        uint256 totalGas = startGas - gasAfterUserCall + fee.feeTransferGasLimit + fee.baseGas;
         uint256 weiCost = totalGas * tx.gasprice;
-        uint256 feeAmount = weiCost * fee.coinPriceInToken / PRICE_PRECISION;
+        uint256 feeAmount = (weiCost * fee.coinPriceInToken) / PRICE_PRECISION;
         if (feeAmount > fee.maxTokenFee) {
             revert MaxFeeExceeded(feeAmount, fee.maxTokenFee);
         }
+        uint256 gasBeforeTransfer = gasleft();
         IERC20(fee.feeToken).safeTransfer(feeReceiver, feeAmount);
-        uint256 feeTransferGasUsed = gasBeforeFeeTransfer - gasleft();
-        bool feeTransferGasLimitExceeded = feeTransferGasUsed > fee.feeTransferGasLimit;
+        uint256 gasAfterTransfer = gasleft();
+        uint256 feeTransferGasUsed = gasBeforeTransfer - gasAfterTransfer;
+        bool exceeded = feeTransferGasUsed > fee.feeTransferGasLimit;
         if (forced) {
-            if (feeTransferGasLimitExceeded) {
+            if (exceeded) {
                 emit FeeTransferGasLimitExceeded(fee.feeTransferGasLimit, feeTransferGasUsed);
             }
         } else {
-            if (feeTransferGasLimitExceeded) {
+            if (exceeded) {
                 revert FeeTransferGasLimitExceededNotForced(fee.feeTransferGasLimit, feeTransferGasUsed);
             }
         }
@@ -101,14 +114,14 @@ contract Tangem7702GaslessExecutor is
 
     function _verifyGaslessTransaction(
         GaslessTransaction calldata gaslessTx,
-        bytes calldata signature
+        bytes calldata signature,
+        bytes32 digest
     ) 
         private 
     {
         if (gaslessTx.nonce != nonce) {
             revert InvalidNonce(nonce, gaslessTx.nonce);
         }
-        bytes32 digest = _hashTypedDataV4(_hashGaslessTransaction(gaslessTx));
         address signer = ECDSA.recover(digest, signature);
         if (signer != address(this)) {
             revert InvalidSigner(signer, address(this));
@@ -145,5 +158,13 @@ contract Tangem7702GaslessExecutor is
             _hashFee(gaslessTx.fee),
             gaslessTx.nonce
         ));
+    }
+
+    function _selector(bytes calldata data) private pure returns (bytes4 sel) {
+        if (data.length >= 4) {
+            assembly {
+                sel := calldataload(data.offset)
+            }
+        }
     }
 }
