@@ -12,6 +12,9 @@ contract Tangem7702GaslessEntryPoint is ITangem7702GaslessEntryPoint {
     /// @inheritdoc ITangem7702GaslessEntryPoint
     address public immutable requiredDelegateAddress;
 
+    /// @notice Deploys the entry point and sets the required EIP-7702 delegate address.
+    /// @dev The entry point will only forward calls for `executor` accounts whose current delegate equals `requiredDelegateAddress_`.
+    /// @param requiredDelegateAddress_ The delegate address that `executor.fetchDelegate()` must return for calls to be forwarded.
     constructor(address requiredDelegateAddress_) {
         requiredDelegateAddress = requiredDelegateAddress_;
     }
