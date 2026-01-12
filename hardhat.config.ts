@@ -5,38 +5,29 @@ import hardhatToolboxMochaEthersPlugin from "@nomicfoundation/hardhat-toolbox-mo
 dotenv.config();
 
 const MNEMONIC = process.env.MNEMONIC;
-const ACCOUNTS = MNEMONIC ? { mnemonic: MNEMONIC, "initialIndex": 0 } : "remote";
+const ACCOUNTS = MNEMONIC ? { mnemonic: MNEMONIC, initialIndex: 0 } : [];
 
-const deploy = task(
-  "deploy",
-  "Deploys all the contracts"
-).setAction(() => import("./tasks/deploy.js"))
-  .build();
+task("deploy", "Deploys all the contracts")
+  .setAction(() => import("./tasks/deploy.js"));
 
 export default defineConfig({
   solidity: {
     version: "0.8.33",
-    settings: {
-      optimizer: {
-        enabled: true,
-        runs: 5000,
-      },
-    },
+    settings: { optimizer: { enabled: true, runs: 200 } },
   },
   networks: {
     ethereum: {
       type: "http",
       chainType: "l1",
-      url: "https://mainnet.gateway.tenderly.co",
-      accounts: ACCOUNTS
+      url: process.env.ETHEREUM_RPC_URL ?? "https://mainnet.gateway.tenderly.co",
+      accounts: ACCOUNTS,
     },
     polygon: {
       type: "http",
       chainType: "l1",
-      url: "https://rpc-mainnet.matic.quiknode.pro/",
-      accounts: ACCOUNTS
+      url: process.env.POLYGON_RPC_URL ?? "https://rpc-mainnet.matic.quiknode.pro/",
+      accounts: ACCOUNTS,
     }
   },
-  tasks: [deploy],
   plugins: [hardhatToolboxMochaEthersPlugin]
 });

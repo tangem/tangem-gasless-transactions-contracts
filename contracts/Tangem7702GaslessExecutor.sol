@@ -1,129 +1,121 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.29;
+pragma solidity 0.8.33;
 
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
-import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {IERC20, SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
+import {ITangem7702GaslessExecutor} from "./interfaces/ITangem7702GaslessExecutor.sol";
 
-// layout at keccak256(abi.encode(uint256(keccak256(bytes(tangem.storage.Tangem7702GaslessExecutor))) - 1)) & ~bytes32(uint256(0xff))
-contract Tangem7702GaslessExecutor is EIP712 layout at 0x63126cb0ee213fd665c396acd692b9c0a13c8cc8bbd732af4f146bb546be9800 {
+contract Tangem7702GaslessExecutor is 
+    EIP712, 
+    ReentrancyGuardTransient,
+    ITangem7702GaslessExecutor 
+    layout at 0x63126cb0ee213fd665c396acd692b9c0a13c8cc8bbd732af4f146bb546be9800 
+{
     using SafeERC20 for IERC20;
 
-    // price is expressed as a price of 1 coin (ether) in smallest unit of token
-    uint private constant PRICE_PRECISION = 1 ether;
+    uint256 private constant PRICE_PRECISION = 1 ether;
 
-    bytes32 private constant TRANSACTION_TYPEHASH = keccak256(
-        "Transaction(address to,uint256 value,bytes data)"
-    );
-    bytes32 private constant FEE_TYPEHASH = keccak256(
-        "Fee(address feeToken,uint256 maxTokenFee,uint256 coinPriceInToken,uint256 feeTransferGasLimit,uint256 baseGas)"
-    );
+    string private constant GASLESS_TRANSACTION_TYPE =
+        "GaslessTransaction(Transaction transaction,Fee fee,uint256 nonce)";
+
+    string private constant FEE_TYPE =
+        "Fee(address feeToken,uint256 maxTokenFee,uint256 coinPriceInToken,uint256 feeTransferGasLimit,uint256 baseGas)";
+
+    string private constant TRANSACTION_TYPE =
+        "Transaction(address to,uint256 value,bytes data)";
+
     bytes32 private constant GASLESS_TRANSACTION_TYPEHASH = keccak256(
-        bytes("GaslessTransaction(Transaction transaction,Fee fee,uint256 nonce)Fee(address feeToken,uint256 maxTokenFee,uint256 coinPriceInToken,uint256 feeTransferGasLimit,uint256 baseGas)Transaction(address to,uint256 value,bytes data)")
+        abi.encodePacked(GASLESS_TRANSACTION_TYPE, FEE_TYPE, TRANSACTION_TYPE)
     );
 
-    uint public nonce;
+    bytes32 private constant FEE_TYPEHASH = keccak256(bytes(FEE_TYPE));
 
-    event TransactionExecuted(GaslessTransaction gaslessTx); // TODO: what data do we need here? gaslessTx as a whole is mostly useless
-    event FeeTransferProcessed(address indexed feeReceiver, address feeToken, uint feeAmount, uint totalGas);
-    event FeeTransferGasLimitExceeded(uint gasLimit, uint gasUsed);
+    bytes32 private constant TRANSACTION_TYPEHASH = keccak256(bytes(TRANSACTION_TYPE));
+
+    /// @inheritdoc ITangem7702GaslessExecutor
+    uint256 public nonce;
 
     constructor() EIP712("Tangem7702GaslessExecutor", "1") {}
 
-    struct Transaction {
-        address to;
-        uint value;
-        bytes data;
-    }
+    /// @inheritdoc ITangem7702GaslessExecutor
+    receive() external payable {}
 
-    struct Fee {
-        address feeToken;
-        uint maxTokenFee;
-        uint coinPriceInToken;
-        uint feeTransferGasLimit;
-        uint baseGas;
-    }
-
-    struct GaslessTransaction {
-        Transaction transaction;
-        Fee fee;
-        uint nonce;
-    }
-
+    /// @inheritdoc ITangem7702GaslessExecutor
     function executeTransaction(
         GaslessTransaction calldata gaslessTx,
         bytes calldata signature,
         address feeReceiver,
         bool forced
-    ) external {
-        require(
-            IERC20(gaslessTx.fee.feeToken).balanceOf(address(this)) >= gaslessTx.fee.maxTokenFee,
-            "GaslessExecutor: insufficent funds for fee"
-        );
+    ) 
+        external 
+        nonReentrant
+    {
+        uint256 balance = IERC20(gaslessTx.fee.feeToken).balanceOf(address(this));
+        if (balance < gaslessTx.fee.maxTokenFee) {
+            revert InsufficientFundsForFee(gaslessTx.fee.feeToken, balance, gaslessTx.fee.maxTokenFee);
+        }
         _verifyGaslessTransaction(gaslessTx, signature);
-
-        uint startGas = gasleft();
-
-        (bool success, ) = gaslessTx.transaction.to.call{
-            value: gaslessTx.transaction.value
-        }(gaslessTx.transaction.data);
-        
-        require(success, "GaslessExecutor: execution failed");
-
+        uint256 startGas = gasleft();
+        (bool success, ) = gaslessTx.transaction.to.call{value: gaslessTx.transaction.value}(gaslessTx.transaction.data);
+        if (!success) {
+            revert ExecutionFailed(gaslessTx.transaction.to, gaslessTx.transaction.value, gaslessTx.transaction.data);
+        }
         if (gaslessTx.fee.coinPriceInToken > 0) {
             _processFeeTransfer(gaslessTx.fee, feeReceiver, startGas, forced);
         }
-
         emit TransactionExecuted(gaslessTx);
     }
-
-    receive() external payable {}
-
-    fallback() external payable {} // TODO do we need it?
 
     function _processFeeTransfer(
         Fee calldata fee,
         address feeReceiver,
-        uint startGas,
+        uint256 startGas,
         bool forced
-    ) private {
-        uint gasBeforeFeeTransfer = gasleft();
-        uint totalGas = startGas - gasBeforeFeeTransfer + fee.feeTransferGasLimit + fee.baseGas;
-
-        uint weiCost = totalGas * tx.gasprice;
-        uint feeAmount = weiCost * fee.coinPriceInToken / PRICE_PRECISION;
-
-        require(feeAmount <= fee.maxTokenFee, "GaslessExecutor: max fee exceeded");
-
+    ) 
+        private 
+    {
+        uint256 gasBeforeFeeTransfer = gasleft();
+        uint256 totalGas = startGas - gasBeforeFeeTransfer + fee.feeTransferGasLimit + fee.baseGas;
+        uint256 weiCost = totalGas * tx.gasprice;
+        uint256 feeAmount = weiCost * fee.coinPriceInToken / PRICE_PRECISION;
+        if (feeAmount > fee.maxTokenFee) {
+            revert MaxFeeExceeded(feeAmount, fee.maxTokenFee);
+        }
         IERC20(fee.feeToken).safeTransfer(feeReceiver, feeAmount);
-
-        uint feeTransferGasUsed = gasBeforeFeeTransfer - gasleft();
+        uint256 feeTransferGasUsed = gasBeforeFeeTransfer - gasleft();
         bool feeTransferGasLimitExceeded = feeTransferGasUsed > fee.feeTransferGasLimit;
-
         if (forced) {
             if (feeTransferGasLimitExceeded) {
                 emit FeeTransferGasLimitExceeded(fee.feeTransferGasLimit, feeTransferGasUsed);
             }
         } else {
-            require(!feeTransferGasLimitExceeded, "GaslessExecutor: fee transfer gas limit exceeded");
+            if (feeTransferGasLimitExceeded) {
+                revert FeeTransferGasLimitExceededNotForced(fee.feeTransferGasLimit, feeTransferGasUsed);
+            }
         }
-
         emit FeeTransferProcessed(feeReceiver, fee.feeToken, feeAmount, totalGas);
     }
 
     function _verifyGaslessTransaction(
         GaslessTransaction calldata gaslessTx,
         bytes calldata signature
-    ) private {
-        require(gaslessTx.nonce == nonce, "GaslessExecutor: invalid nonce");
-
+    ) 
+        private 
+    {
+        if (gaslessTx.nonce != nonce) {
+            revert InvalidNonce(nonce, gaslessTx.nonce);
+        }
         bytes32 digest = _hashTypedDataV4(_hashGaslessTransaction(gaslessTx));
         address signer = ECDSA.recover(digest, signature);
-
-        require(signer == address(this), "GaslessExecutor: invalid signer");
-
-        nonce++;
+        if (signer != address(this)) {
+            revert InvalidSigner(signer, address(this));
+        }
+        unchecked {
+            ++nonce;
+        }
     }
 
     function _hashTransaction(Transaction calldata transaction) private pure returns (bytes32) {
@@ -146,11 +138,7 @@ contract Tangem7702GaslessExecutor is EIP712 layout at 0x63126cb0ee213fd665c396a
         ));
     }
 
-    function _hashGaslessTransaction(GaslessTransaction calldata gaslessTx)
-        private
-        pure
-        returns (bytes32)
-    {
+    function _hashGaslessTransaction(GaslessTransaction calldata gaslessTx) private pure returns (bytes32) {
         return keccak256(abi.encode(
             GASLESS_TRANSACTION_TYPEHASH,
             _hashTransaction(gaslessTx.transaction),
