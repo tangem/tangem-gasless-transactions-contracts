@@ -1,30 +1,37 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.29;
+pragma solidity 0.8.33;
 
-import "@openzeppelin/contracts/account/utils/EIP7702Utils.sol";
-import "./Tangem7702GaslessExecutor.sol";
+import {EIP7702Utils} from "@openzeppelin/contracts/account/utils/EIP7702Utils.sol";
 
-// keccak256("tangem.storage.Tangem7702GaslessExecutor") TODO
-contract Tangem7702GaslessEntryPoint {
+import {ITangem7702GaslessEntryPoint} from "./interfaces/ITangem7702GaslessEntryPoint.sol";
+import {ITangem7702GaslessExecutor} from "./interfaces/ITangem7702GaslessExecutor.sol";
+
+contract Tangem7702GaslessEntryPoint is ITangem7702GaslessEntryPoint {
     using EIP7702Utils for address;
 
-    address public requiredDelegateAddress;
+    /// @inheritdoc ITangem7702GaslessEntryPoint
+    address public immutable requiredDelegateAddress;
 
     constructor(address requiredDelegateAddress_) {
         requiredDelegateAddress = requiredDelegateAddress_;
     }
 
+    /// @inheritdoc ITangem7702GaslessEntryPoint
     function executeTransaction(
-        Tangem7702GaslessExecutor.GaslessTransaction calldata gasslessTx,
+        ITangem7702GaslessExecutor.GaslessTransaction calldata gaslessTx,
         bytes calldata signature,
         address feeReceiver,
         bool forced,
         address executor
-    ) public {
-        require(executor.fetchDelegate() == requiredDelegateAddress, "EntryPoint: invalid delegate");
-
-        Tangem7702GaslessExecutor(payable(executor)).executeTransaction(
-            gasslessTx,
+    ) 
+        external
+    {
+        address actualDelegate = executor.fetchDelegate();
+        if (actualDelegate != requiredDelegateAddress) {
+            revert InvalidDelegate(executor, requiredDelegateAddress, actualDelegate);
+        }
+        ITangem7702GaslessExecutor(payable(executor)).executeTransaction(
+            gaslessTx,
             signature,
             feeReceiver,
             forced
