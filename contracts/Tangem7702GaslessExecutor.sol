@@ -32,7 +32,7 @@ contract Tangem7702GaslessExecutor is
     );
 
     bytes32 private constant FEE_TYPEHASH = keccak256(bytes(FEE_TYPE));
-
+    
     bytes32 private constant TRANSACTION_TYPEHASH = keccak256(bytes(TRANSACTION_TYPE));
 
     /// @inheritdoc ITangem7702GaslessExecutor
@@ -57,12 +57,15 @@ contract Tangem7702GaslessExecutor is
         if (balance < gaslessTx.fee.maxTokenFee) {
             revert InsufficientFundsForFee(gaslessTx.fee.feeToken, balance, gaslessTx.fee.maxTokenFee);
         }
-        bytes32 structHash = _hashGaslessTransaction(gaslessTx);
+        if (gaslessTx.nonce != nonce) {
+            revert InvalidNonce(nonce, gaslessTx.nonce);
+        }
+        bytes32 dataHash = keccak256(gaslessTx.transaction.data);
+        bytes32 structHash = _hashGaslessTransaction(gaslessTx, dataHash);
         bytes32 digest = _hashTypedDataV4(structHash);
-        _verifyGaslessTransaction(gaslessTx, signature, digest);
+        _verifyGaslessTransaction(signature, digest);
         uint256 startGas = gasleft();
         (bool success, ) = gaslessTx.transaction.to.call{value: gaslessTx.transaction.value}(gaslessTx.transaction.data);
-        bytes32 dataHash = keccak256(gaslessTx.transaction.data);
         if (!success) {
             bytes4 selector = _selector(gaslessTx.transaction.data);
             revert ExecutionFailed(gaslessTx.transaction.to, gaslessTx.transaction.value, selector, dataHash);
@@ -113,15 +116,11 @@ contract Tangem7702GaslessExecutor is
     }
 
     function _verifyGaslessTransaction(
-        GaslessTransaction calldata gaslessTx,
         bytes calldata signature,
         bytes32 digest
     ) 
         private 
     {
-        if (gaslessTx.nonce != nonce) {
-            revert InvalidNonce(nonce, gaslessTx.nonce);
-        }
         address signer = ECDSA.recover(digest, signature);
         if (signer != address(this)) {
             revert InvalidSigner(signer, address(this));
@@ -131,33 +130,53 @@ contract Tangem7702GaslessExecutor is
         }
     }
 
-    function _hashTransaction(Transaction calldata transaction) private pure returns (bytes32) {
-        return keccak256(abi.encode(
-            TRANSACTION_TYPEHASH,
-            transaction.to,
-            transaction.value,
-            keccak256(transaction.data)
-        ));
-    }
-    
-    function _hashFee(Fee calldata fee) private pure returns (bytes32) {
-        return keccak256(abi.encode(
-            FEE_TYPEHASH,
-            fee.feeToken,
-            fee.maxTokenFee,
-            fee.coinPriceInToken,
-            fee.feeTransferGasLimit,
-            fee.baseGas
-        ));
+    function _hashTransaction(
+        Transaction calldata transaction,
+        bytes32 dataHash
+    )
+        private
+        pure
+        returns (bytes32)
+    {
+        return keccak256(
+            abi.encode(
+                TRANSACTION_TYPEHASH,
+                transaction.to,
+                transaction.value,
+                dataHash
+            )
+        );
     }
 
-    function _hashGaslessTransaction(GaslessTransaction calldata gaslessTx) private pure returns (bytes32) {
-        return keccak256(abi.encode(
-            GASLESS_TRANSACTION_TYPEHASH,
-            _hashTransaction(gaslessTx.transaction),
-            _hashFee(gaslessTx.fee),
-            gaslessTx.nonce
-        ));
+    function _hashFee(Fee calldata fee) private pure returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                FEE_TYPEHASH,
+                fee.feeToken,
+                fee.maxTokenFee,
+                fee.coinPriceInToken,
+                fee.feeTransferGasLimit,
+                fee.baseGas
+            )
+        );
+    }
+
+    function _hashGaslessTransaction(
+        GaslessTransaction calldata gaslessTx,
+        bytes32 dataHash
+    )
+        private
+        pure
+        returns (bytes32)
+    {
+        return keccak256(
+            abi.encode(
+                GASLESS_TRANSACTION_TYPEHASH,
+                _hashTransaction(gaslessTx.transaction, dataHash),
+                _hashFee(gaslessTx.fee),
+                gaslessTx.nonce
+            )
+        );
     }
 
     function _selector(bytes calldata data) private pure returns (bytes4 sel) {
