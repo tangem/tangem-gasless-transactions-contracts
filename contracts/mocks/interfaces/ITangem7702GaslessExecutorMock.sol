@@ -112,9 +112,4 @@ interface ITangem7702GaslessExecutorMock {
     /// @dev Stored as `keccak256(signature)` to avoid saving dynamic bytes.
     /// @return hash The signature hash of the last call.
     function lastSignatureHash() external view returns (bytes32 hash);
-
-    /// @notice Returns the nonce value exposed by the mock.
-    /// @dev Always returns 0. The mock does not implement nonce management and is only used for EntryPoint tests.
-    /// @return currentNonce Always 0.
-    function nonce() external pure returns (uint256);
 }
