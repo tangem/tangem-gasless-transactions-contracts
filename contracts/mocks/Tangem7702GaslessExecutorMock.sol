@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.33;
 
-import {ITangem7702GaslessExecutorMock} from "../interfaces/ITangem7702GaslessExecutorMock.sol";
+import {ITangem7702GaslessExecutorMock} from "./interfaces/ITangem7702GaslessExecutorMock.sol";
 
 contract Tangem7702GaslessExecutorMock is ITangem7702GaslessExecutorMock {
     /// @inheritdoc ITangem7702GaslessExecutorMock
@@ -39,11 +39,6 @@ contract Tangem7702GaslessExecutorMock is ITangem7702GaslessExecutorMock {
 
     /// @inheritdoc ITangem7702GaslessExecutorMock
     receive() external payable {}
-
-    /// @inheritdoc ITangem7702GaslessExecutorMock
-    function nonce() external pure returns (uint256) {
-        return 0;
-    }
 
     /// @inheritdoc ITangem7702GaslessExecutorMock
     function executeTransaction(
