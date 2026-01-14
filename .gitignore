@@ -12,3 +12,4 @@ node_modules
 # Exporters files
 abi
 bin
+/types
