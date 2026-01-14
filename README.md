@@ -3,6 +3,6 @@ EVM smart contracts for Tangem Gasless Transactions
 
 ## Current test mainnet deployment (Polygon PoS)
 
-Tangem7702GaslessExecutor - [0x0Ac67D0473f6fCbb28cf1cC06B172b1c8459Efc4](https://polygonscan.com/address/0x0Ac67D0473f6fCbb28cf1cC06B172b1c8459Efc4)
+Tangem7702GaslessExecutor - [0x041760838DaC2AC9013D26C9550daa519bd29bB9](https://polygonscan.com/address/0x041760838DaC2AC9013D26C9550daa519bd29bB9)
 
-Tangem7702GaslessEntryPoint - [0x055b4d457b7DBdfB3524817a30DaCf7E1a71F741](https://polygonscan.com/address/0x055b4d457b7DBdfB3524817a30DaCf7E1a71F741)
+Tangem7702GaslessEntryPoint - [0x46C693B4B8E72fd5e4EC990d849066b864063dEC](https://polygonscan.com/address/0x46C693B4B8E72fd5e4EC990d849066b864063dEC)
