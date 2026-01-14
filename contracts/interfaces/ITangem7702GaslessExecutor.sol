@@ -46,8 +46,10 @@ interface ITangem7702GaslessExecutor {
     /// @param maxTokenFee Maximum fee required by the signed payload.
     error InsufficientFundsForFee(address feeToken, uint256 balance, uint256 maxTokenFee);
 
-    /// @notice Thrown when the target call fails.
-    /// @dev `selector` and `dataHash` identify the intended calldata without returning the full bytes payload.
+    /// @notice Thrown when the target call fails without revert data.
+    /// @dev If the target reverts with non-empty revert data (custom error / Error(string) / Panic(uint256)),
+    ///      the executor bubbles that revert data instead of using this error.
+    ///      `selector` and `dataHash` identify the intended calldata without returning the full bytes payload.
     /// @param to Target contract address that was called.
     /// @param value Native coin value sent with the call.
     /// @param selector First 4 bytes of calldata (function selector), or 0x00000000 if calldata is shorter than 4 bytes.
@@ -79,20 +81,18 @@ interface ITangem7702GaslessExecutor {
     error InvalidSigner(address recoveredSigner, address expectedSigner);
 
     /// @notice Emitted after a gasless transaction is executed (and fee processing, if enabled, completes).
-    /// @dev `digest` is the EIP-712 typed data digest that was verified; `dataHash` identifies calldata.
+    /// @dev `dataHash` identifies the intended calldata without emitting full bytes.
     /// @param executor The executing account (EIP-7702 delegating account), i.e., `address(this)` in delegated context.
     /// @param nonce The nonce value used by the signed payload.
     /// @param to The target contract that was called.
     /// @param value Native coin value sent with the call.
     /// @param dataHash Keccak256 hash of the calldata.
-    /// @param digest EIP-712 digest that was recovered and verified.
     event TransactionExecuted(
         address indexed executor,
         uint256 indexed nonce,
         address indexed to,
         uint256 value,
-        bytes32 dataHash,
-        bytes32 digest
+        bytes32 dataHash
     );
 
     /// @notice Emitted after the fee token transfer is processed.
@@ -118,12 +118,24 @@ interface ITangem7702GaslessExecutor {
     /// @dev Required to support value transfers and funding the account.
     receive() external payable;
 
-    /// @notice Executes a signed gasless transaction and optionally transfers a fee in an ERC-20 token.
-    /// @dev Must be called in the context of an EIP-7702 delegating account; signature is checked against `address(this)`.
+    /// @notice Fallback handler for unknown function selectors.
+    /// @dev Intentionally does nothing and accepts ETH to keep the executor permissive for
+    ///      accidental transfers/calls in delegated (EIP-7702) context. No state is modified.
+    fallback() external payable;
+
+    /// @notice Executes a user-signed gasless transaction and optionally pays a fee in an ERC-20 token.
+    /// @dev Must be called in the context of an EIP-7702 delegating account; the recovered signer is required
+    ///      to equal `address(this)` in the delegated execution context.
+    ///      Verifies `gaslessTx.nonce` and the EIP-712 signature before executing the target call and increments
+    ///      the stored `nonce` on successful verification (state changes roll back if the transaction reverts later).
+    ///      If the target call reverts with non-empty revert data (custom error / Error(string) / Panic(uint256)),
+    ///      this function bubbles the revert data. If the target call reverts with empty data, it reverts with
+    ///      {ExecutionFailed} for diagnostics.
+    ///      Fee processing is executed only when `gaslessTx.fee.coinPriceInToken > 0`.
     /// @param gaslessTx The signed payload containing the target call, fee parameters, and nonce.
-    /// @param signature EIP-712 signature over `gaslessTx` produced by the executor account.
-    /// @param feeReceiver Address that receives the fee token transfer.
-    /// @param forced If true, fee transfer gas limit overruns emit an event; if false, they revert.
+    /// @param signature The EIP-712 signature over `gaslessTx` produced by the executor account.
+    /// @param feeReceiver The recipient of the fee paid in `gaslessTx.fee.feeToken`.
+    /// @param forced If true, exceeding `feeTransferGasLimit` is reported via an event; otherwise it reverts.
     function executeTransaction(
         GaslessTransaction calldata gaslessTx,
         bytes calldata signature,

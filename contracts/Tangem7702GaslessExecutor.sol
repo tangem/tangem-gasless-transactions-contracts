@@ -3,14 +3,12 @@ pragma solidity 0.8.33;
 
 import {IERC20, SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
-import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 import {ITangem7702GaslessExecutor} from "./interfaces/ITangem7702GaslessExecutor.sol";
 
 contract Tangem7702GaslessExecutor is 
-    EIP712, 
-    ReentrancyGuardTransient,
+    EIP712,
     ITangem7702GaslessExecutor 
     layout at 0x63126cb0ee213fd665c396acd692b9c0a13c8cc8bbd732af4f146bb546be9800 
 {
@@ -64,6 +62,9 @@ contract Tangem7702GaslessExecutor is
 
     /// @inheritdoc ITangem7702GaslessExecutor
     receive() external payable {}
+    
+    /// @inheritdoc ITangem7702GaslessExecutor
+    fallback() external payable {}
 
     /// @inheritdoc ITangem7702GaslessExecutor
     function executeTransaction(
@@ -72,25 +73,28 @@ contract Tangem7702GaslessExecutor is
         address feeReceiver,
         bool forced
     ) 
-        external 
-        nonReentrant
+        external
     {
         uint256 balance = IERC20(gaslessTx.fee.feeToken).balanceOf(address(this));
         if (balance < gaslessTx.fee.maxTokenFee) {
             revert InsufficientFundsForFee(gaslessTx.fee.feeToken, balance, gaslessTx.fee.maxTokenFee);
         }
-        if (gaslessTx.nonce != nonce) {
-            revert InvalidNonce(nonce, gaslessTx.nonce);
-        }
         bytes32 dataHash = keccak256(gaslessTx.transaction.data);
-        bytes32 structHash = _hashGaslessTransaction(gaslessTx, dataHash);
-        bytes32 digest = _hashTypedDataV4(structHash);
-        _verifyGaslessTransaction(signature, digest);
+        _verifyGaslessTransaction(gaslessTx, signature, dataHash);
         uint256 startGas = gasleft();
-        (bool success, ) = gaslessTx.transaction.to.call{value: gaslessTx.transaction.value}(gaslessTx.transaction.data);
+        (bool success, bytes memory ret) = gaslessTx.transaction.to.call{value: gaslessTx.transaction.value}(gaslessTx.transaction.data);
         if (!success) {
-            bytes4 selector = _selector(gaslessTx.transaction.data);
-            revert ExecutionFailed(gaslessTx.transaction.to, gaslessTx.transaction.value, selector, dataHash);
+            if (ret.length == 0) {
+                revert ExecutionFailed(
+                    gaslessTx.transaction.to,
+                    gaslessTx.transaction.value,
+                    _selector(gaslessTx.transaction.data),
+                    dataHash
+                );
+            }
+            assembly {
+                revert(add(ret, 0x20), mload(ret))
+            }
         }
         if (gaslessTx.fee.coinPriceInToken > 0) {
             _processFeeTransfer(gaslessTx.fee, feeReceiver, startGas, forced);
@@ -100,8 +104,7 @@ contract Tangem7702GaslessExecutor is
             gaslessTx.nonce,
             gaslessTx.transaction.to,
             gaslessTx.transaction.value,
-            dataHash,
-            digest
+            dataHash
         );
     }
 
@@ -147,23 +150,32 @@ contract Tangem7702GaslessExecutor is
         emit FeeTransferProcessed(feeReceiver, fee.feeToken, feeAmount, totalGas);
     }
 
-    /// @notice Verifies the EIP-712 signature for a gasless transaction and consumes the nonce.
-    /// @dev Recovers the signer from `digest` and requires it to equal `address(this)` in the
-    ///      EIP-7702 delegated execution context. Increments `nonce` after a successful check.
-    /// @param signature EIP-712 signature over the transaction digest.
-    /// @param digest EIP-712 typed data digest computed from the signed payload.
+    /// @notice Verifies a gasless transaction EIP-712 signature and consumes the nonce.
+    /// @dev Requires `gaslessTx.nonce` to equal the current stored `nonce`, computes the EIP-712 digest for `gaslessTx`
+    ///      (using `dataHash` for the dynamic `transaction.data` field), recovers the signer from `signature`,
+    ///      and requires it to equal `address(this)` in the EIP-7702 delegated execution context.
+    ///      Increments `nonce` after a successful verification.
+    /// @param gaslessTx The gasless transaction payload being authorized (target call, fee config, and nonce).
+    /// @param signature The EIP-712 signature over the typed data digest produced by the executor account.
+    /// @param dataHash Keccak256 hash of `gaslessTx.transaction.data` to avoid re-hashing dynamic calldata.
     function _verifyGaslessTransaction(
+        GaslessTransaction calldata gaslessTx,
         bytes calldata signature,
-        bytes32 digest
-    ) 
-        private 
+        bytes32 dataHash
+    )
+        private
     {
+        if (gaslessTx.nonce != nonce) {
+            revert InvalidNonce(nonce, gaslessTx.nonce);
+        }
+        bytes32 structHash = _hashGaslessTransaction(gaslessTx, dataHash);
+        bytes32 digest = _hashTypedDataV4(structHash);
         address signer = ECDSA.recover(digest, signature);
         if (signer != address(this)) {
             revert InvalidSigner(signer, address(this));
         }
-        unchecked {
-            ++nonce;
+        unchecked { 
+            ++nonce; 
         }
     }
 

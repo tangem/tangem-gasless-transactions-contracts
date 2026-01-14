@@ -39,4 +39,9 @@ interface IExecutorTargetMock {
     /// @notice Test function that always reverts.
     /// @dev Used by tests to trigger the executor's {ExecutionFailed} error path.
     function fail() external pure;
+
+    /// @notice Test function that always reverts with empty returndata.
+    /// @dev Used by tests to cover the executor branch where the target call fails but returns no revert data,
+    ///      so the executor cannot bubble a revert reason and must fallback to {ExecutionFailed}.
+    function failNoData() external pure;
 }
