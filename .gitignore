@@ -1,5 +1,9 @@
+artifacts
+cache
 node_modules
+coverage
 .env
+.DS_Store
 
 # Hardhat files
 /cache
@@ -12,4 +16,4 @@ node_modules
 # Exporters files
 abi
 bin
-/types
+types
