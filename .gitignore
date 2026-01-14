@@ -1,7 +1,19 @@
 artifacts
 cache
 node_modules
-types
 coverage
 .env
 .DS_Store
+
+# Hardhat files
+/cache
+/artifacts
+
+# solidity-coverage files
+/coverage
+/coverage.json
+
+# Exporters files
+abi
+bin
+types
