@@ -179,17 +179,13 @@ describe("Tangem7702GaslessExecutor", function () {
     expect(await executor.nonce()).to.equal(0n);
   });
 
-  it("Reverts with ExecutionFailed and extracts selector when target call fails with 4+ bytes calldata", async function () {
+  it("Bubbles revert reason when target reverts with string reason", async function () {
     // Load fresh fixture state for this test.
     const { executor, token, target, feeReceiver, relayer, executorEOA } =
       await networkHelpers.loadFixture(deployExecutorFixture);
 
-    // Encode a call to a function that always reverts to force the executor's ExecutionFailed path.
+    // Encode a call to a function that always reverts with a reason string to test bubbling.
     const data = target.interface.encodeFunctionData("fail", []);
-
-    // Pre-compute what the contract should report in the custom error.
-    const dataHash = ethers.keccak256(data);
-    const selector = target.interface.getFunction("fail").selector;
 
     // Build a gasless transaction that triggers a reverting target call.
     const gaslessTx = makeGaslessTx({
@@ -212,29 +208,25 @@ describe("Tangem7702GaslessExecutor", function () {
       gaslessTx,
     });
 
-    // Expect the executor to revert with ExecutionFailed and include selector + dataHash for diagnostics.
+    // Expect the executor to bubble the target's revert reason.
     await expect(
       executor.connect(relayer).executeTransaction(gaslessTx, signature, feeReceiver.address, false)
     )
-      .to.be.revertedWithCustomError(executor, "ExecutionFailed")
-      .withArgs(await target.getAddress(), 0n, selector, dataHash);
+      .to.be.revertedWith("FAIL");
 
-    // Confirm nonce increments are rolled back on revert.
+    // Confirm nonce increment is rolled back because the whole call reverted.
     expect(await executor.nonce()).to.equal(0n);
   });
 
-  it("Reverts with ExecutionFailed and returns 0x00000000 selector when calldata is shorter than 4 bytes", async function () {
+  it("Bubbles revert reason when fallback reverts with string reason", async function () {
     // Load fresh fixture state for this test.
     const { executor, token, target, feeReceiver, relayer, executorEOA } =
       await networkHelpers.loadFixture(deployExecutorFixture);
 
-    // Provide 1-byte calldata so the selector extraction code returns 0x00000000 by design.
+    // Provide short calldata so the call hits the target fallback and reverts with a reason string.
     const data = "0x11";
 
-    // Pre-compute expected dataHash for the custom error.
-    const dataHash = ethers.keccak256(data);
-
-    // Use the target address but with invalid (short) calldata so the call fails and selector becomes zero.
+    // Use the target address with calldata that does not match any function so fallback reverts.
     const gaslessTx = makeGaslessTx({
       to: await target.getAddress(),
       value: 0n,
@@ -255,14 +247,57 @@ describe("Tangem7702GaslessExecutor", function () {
       gaslessTx,
     });
 
-    // Expect ExecutionFailed and a zero selector because calldata length < 4.
+    // Expect the executor to bubble the fallback revert reason.
+    await expect(
+      executor.connect(relayer).executeTransaction(gaslessTx, signature, feeReceiver.address, false)
+    )
+      .to.be.revertedWith("FALLBACK");
+
+    // Confirm nonce increment is rolled back because the whole call reverted.
+    expect(await executor.nonce()).to.equal(0n);
+  });
+
+  it("Reverts with ExecutionFailed when target reverts with empty data", async function () {
+    // Load fresh fixture state for this test.
+    const { executor, token, target, feeReceiver, relayer, executorEOA } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    // Encode a target call that reverts with empty returndata so the executor cannot bubble a reason.
+    const data = target.interface.encodeFunctionData("failNoData", []);
+
+    // Pre-compute calldata hash and selector expected to be surfaced via ExecutionFailed.
+    const dataHash = ethers.keccak256(data);
+    const selector = target.interface.getFunction("failNoData").selector;
+
+    // Build a gasless transaction that reaches the target call and triggers the empty-revert-data branch.
+    const gaslessTx = makeGaslessTx({
+      to: await target.getAddress(),
+      value: 0n,
+      data,
+      feeToken: await token.getAddress(),
+      maxTokenFee: 0n,
+      coinPriceInToken: 0n,
+      feeTransferGasLimit: 0n,
+      baseGas: 0n,
+      nonce: 0n,
+    });
+
+    // Produce a valid signature from executorEOA so execution reaches the target call.
+    const { signature } = await signGaslessTx({
+      conn,
+      executorSigner: await ethers.getSigner(executorEOA.address),
+      executorAddress: executorEOA.address,
+      gaslessTx,
+    });
+
+    // Expect ExecutionFailed because the target returned no revert data to bubble.
     await expect(
       executor.connect(relayer).executeTransaction(gaslessTx, signature, feeReceiver.address, false)
     )
       .to.be.revertedWithCustomError(executor, "ExecutionFailed")
-      .withArgs(await target.getAddress(), 0n, "0x00000000", dataHash);
+      .withArgs(await target.getAddress(), 0n, selector, dataHash);
 
-    // Confirm nonce increments are rolled back on revert.
+    // Confirm nonce increment is rolled back because the whole call reverted.
     expect(await executor.nonce()).to.equal(0n);
   });
 
@@ -294,7 +329,7 @@ describe("Tangem7702GaslessExecutor", function () {
     });
 
     // Produce a valid signature from executorEOA for this payload and domain.
-    const { signature, digest } = await signGaslessTx({
+    const { signature } = await signGaslessTx({
       conn,
       executorSigner: await ethers.getSigner(executorEOA.address),
       executorAddress: executorEOA.address,
@@ -310,10 +345,10 @@ describe("Tangem7702GaslessExecutor", function () {
     await expect(tx).to.not.emit(executor, "FeeTransferProcessed");
     await expect(tx).to.not.emit(executor, "FeeTransferGasLimitExceeded");
 
-    // Ensure TransactionExecuted is emitted with exact executor/to/value/dataHash/digest arguments.
+    // Ensure TransactionExecuted is emitted with exact executor/to/value/dataHash arguments.
     await expect(tx)
       .to.emit(executor, "TransactionExecuted")
-      .withArgs(executorEOA.address, 0n, await target.getAddress(), value, dataHash, digest);
+      .withArgs(executorEOA.address, 0n, await target.getAddress(), value, dataHash);
 
     // Verify nonce increments exactly once on success.
     expect(await executor.nonce()).to.equal(1n);
@@ -356,7 +391,7 @@ describe("Tangem7702GaslessExecutor", function () {
     });
 
     // Produce a valid signature from executorEOA.
-    const { signature, digest } = await signGaslessTx({
+    const { signature } = await signGaslessTx({
       conn,
       executorSigner: await ethers.getSigner(executorEOA.address),
       executorAddress: executorEOA.address,
@@ -406,7 +441,7 @@ describe("Tangem7702GaslessExecutor", function () {
     // TransactionExecuted must still be emitted after fee processing succeeds.
     await expect(tx)
       .to.emit(executor, "TransactionExecuted")
-      .withArgs(executorEOA.address, 0n, await target.getAddress(), 0n, dataHash, digest);
+      .withArgs(executorEOA.address, 0n, await target.getAddress(), 0n, dataHash);
 
     // Nonce must increment after a successful end-to-end execution.
     expect(await executor.nonce()).to.equal(1n);

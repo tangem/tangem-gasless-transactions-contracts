@@ -32,4 +32,11 @@ contract ExecutorTargetMock is IExecutorTargetMock {
     function fail() external pure {
         revert("FAIL");
     }
+
+    /// @inheritdoc IExecutorTargetMock
+    function failNoData() external pure {
+        assembly {
+            revert(0, 0)
+        }
+    }
 }
