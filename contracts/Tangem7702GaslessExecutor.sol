@@ -64,33 +64,36 @@ contract Tangem7702GaslessExecutor is
             balance >= gaslessTx.fee.maxTokenFee,
             InsufficientFundsForFee(gaslessTx.fee.feeToken, balance, gaslessTx.fee.maxTokenFee)
         );
+        _verifyGaslessTransaction(gaslessTx, signature);
 
-        bytes32 dataHash = keccak256(gaslessTx.transaction.data);
-        _verifyGaslessTransaction(gaslessTx, signature, dataHash);
         uint256 startGas = gasleft();
-        (bool success, bytes memory ret) = gaslessTx.transaction.to.call{value: gaslessTx.transaction.value}(gaslessTx.transaction.data);
+
+        (bool success, bytes memory returnData) =
+            gaslessTx.transaction.to.call{value: gaslessTx.transaction.value}(gaslessTx.transaction.data);
+
         if (!success) {
-            if (ret.length == 0) {
+            if (returnData.length == 0) {
                 revert ExecutionFailed(
                     gaslessTx.transaction.to,
                     gaslessTx.transaction.value,
-                    _selector(gaslessTx.transaction.data),
-                    dataHash
+                    _selector(gaslessTx.transaction.data)
                 );
             }
             assembly {
-                revert(add(ret, 0x20), mload(ret))
+                revert(add(returnData, 0x20), mload(returnData))
             }
         }
+
         if (gaslessTx.fee.coinPriceInToken > 0) {
             _processFeeTransfer(gaslessTx.fee, feeReceiver, startGas, forced);
         }
+
         emit TransactionExecuted(
             address(this),
             gaslessTx.nonce,
             gaslessTx.transaction.to,
             gaslessTx.transaction.value,
-            dataHash
+            _selector(gaslessTx.transaction.data)
         );
     }
 
@@ -137,27 +140,20 @@ contract Tangem7702GaslessExecutor is
                 FeeTransferGasLimitExceededNotForced(fee.feeTransferGasLimit, feeTransferGasUsed)
             );
         }
+
         emit FeeTransferProcessed(feeReceiver, fee.feeToken, feeAmount, totalGas);
     }
 
     /// @notice Verifies a gasless transaction EIP-712 signature and consumes the nonce.
     /// @dev Requires `gaslessTx.nonce` to equal the current stored `nonce`, computes the EIP-712 digest for `gaslessTx`
-    ///      (using `dataHash` for the dynamic `transaction.data` field), recovers the signer from `signature`,
-    ///      and requires it to equal `address(this)` in the EIP-7702 delegated execution context.
-    ///      Increments `nonce` after a successful verification.
+    ///      , recovers the signer from `signature`, and requires it to equal `address(this)` in the EIP-7702 delegated
+    ///      execution context. Increments `nonce` after a successful verification.
     /// @param gaslessTx The gasless transaction payload being authorized (target call, fee config, and nonce).
     /// @param signature The EIP-712 signature over the typed data digest produced by the executor account.
-    /// @param dataHash Keccak256 hash of `gaslessTx.transaction.data` to avoid re-hashing dynamic calldata.
-    function _verifyGaslessTransaction(
-        GaslessTransaction calldata gaslessTx,
-        bytes calldata signature,
-        bytes32 dataHash
-    )
-        private
-    {
+    function _verifyGaslessTransaction(GaslessTransaction calldata gaslessTx, bytes calldata signature) private {
         require (gaslessTx.nonce == nonce, InvalidNonce(nonce, gaslessTx.nonce));
 
-        bytes32 structHash = _hashGaslessTransaction(gaslessTx, dataHash);
+        bytes32 structHash = _hashGaslessTransaction(gaslessTx);
         bytes32 digest = _hashTypedDataV4(structHash);
         address signer = ECDSA.recover(digest, signature);
 
@@ -169,24 +165,16 @@ contract Tangem7702GaslessExecutor is
     }
 
     /// @notice Computes the EIP-712 struct hash for a `Transaction`.
-    /// @dev Uses `dataHash` (keccak256 of calldata) to avoid hashing dynamic bytes multiple times.
+    /// @dev Encodes fields with `TRANSACTION_TYPEHASH` per EIP-712.
     /// @param transaction The transaction parameters being signed.
-    /// @param dataHash Keccak256 hash of `transaction.data`.
     /// @return hash The EIP-712 struct hash of `Transaction`.
-    function _hashTransaction(
-        Transaction calldata transaction,
-        bytes32 dataHash
-    )
-        private
-        pure
-        returns (bytes32)
-    {
+    function _hashTransaction(Transaction calldata transaction) private pure returns (bytes32) {
         return keccak256(
             abi.encode(
                 TRANSACTION_TYPEHASH,
                 transaction.to,
                 transaction.value,
-                dataHash
+                keccak256(transaction.data)
             )
         );
     }
@@ -211,20 +199,12 @@ contract Tangem7702GaslessExecutor is
     /// @notice Computes the EIP-712 struct hash for a `GaslessTransaction`.
     /// @dev Encodes the nested `Transaction` and `Fee` hashes with `GASLESS_TRANSACTION_TYPEHASH`.
     /// @param gaslessTx The gasless transaction being signed.
-    /// @param dataHash Keccak256 hash of `gaslessTx.transaction.data`.
     /// @return hash The EIP-712 struct hash of `GaslessTransaction`.
-    function _hashGaslessTransaction(
-        GaslessTransaction calldata gaslessTx,
-        bytes32 dataHash
-    )
-        private
-        pure
-        returns (bytes32)
-    {
+    function _hashGaslessTransaction(GaslessTransaction calldata gaslessTx) private pure returns (bytes32) {
         return keccak256(
             abi.encode(
                 GASLESS_TRANSACTION_TYPEHASH,
-                _hashTransaction(gaslessTx.transaction, dataHash),
+                _hashTransaction(gaslessTx.transaction),
                 _hashFee(gaslessTx.fee),
                 gaslessTx.nonce
             )

@@ -265,8 +265,7 @@ describe("Tangem7702GaslessExecutor", function () {
     // Encode a target call that reverts with empty returndata so the executor cannot bubble a reason.
     const data = target.interface.encodeFunctionData("failNoData", []);
 
-    // Pre-compute calldata hash and selector expected to be surfaced via ExecutionFailed.
-    const dataHash = ethers.keccak256(data);
+    // Pre-compute selector expected to be surfaced via ExecutionFailed.
     const selector = target.interface.getFunction("failNoData").selector;
 
     // Build a gasless transaction that reaches the target call and triggers the empty-revert-data branch.
@@ -295,7 +294,7 @@ describe("Tangem7702GaslessExecutor", function () {
       executor.connect(relayer).executeTransaction(gaslessTx, signature, feeReceiver.address, false)
     )
       .to.be.revertedWithCustomError(executor, "ExecutionFailed")
-      .withArgs(await target.getAddress(), 0n, selector, dataHash);
+      .withArgs(await target.getAddress(), 0n, selector);
 
     // Confirm nonce increment is rolled back because the whole call reverted.
     expect(await executor.nonce()).to.equal(0n);
@@ -312,8 +311,8 @@ describe("Tangem7702GaslessExecutor", function () {
     // Encode a successful target call that records msg.value and increments its own call counter.
     const data = target.interface.encodeFunctionData("ok", ["0xAABBCC"]);
 
-    // Pre-compute expected dataHash used in TransactionExecuted event.
-    const dataHash = ethers.keccak256(data);
+    // Pre-compute selector expected in TransactionExecuted event.
+    const selector = target.interface.getFunction("ok").selector;
 
     // fee disabled => coinPriceInToken == 0 => _processFeeTransfer must not be called.
     const gaslessTx = makeGaslessTx({
@@ -345,10 +344,10 @@ describe("Tangem7702GaslessExecutor", function () {
     await expect(tx).to.not.emit(executor, "FeeTransferProcessed");
     await expect(tx).to.not.emit(executor, "FeeTransferGasLimitExceeded");
 
-    // Ensure TransactionExecuted is emitted with exact executor/to/value/dataHash arguments.
+    // Ensure TransactionExecuted is emitted with exact executor/to/value/selector arguments.
     await expect(tx)
       .to.emit(executor, "TransactionExecuted")
-      .withArgs(executorEOA.address, 0n, await target.getAddress(), value, dataHash);
+      .withArgs(executorEOA.address, 0n, await target.getAddress(), value, selector);
 
     // Verify nonce increments exactly once on success.
     expect(await executor.nonce()).to.equal(1n);
@@ -374,8 +373,8 @@ describe("Tangem7702GaslessExecutor", function () {
     // Encode a successful target call so we can reach fee processing logic.
     const data = target.interface.encodeFunctionData("ok", ["0x01"]);
 
-    // Pre-compute expected dataHash used in TransactionExecuted event.
-    const dataHash = ethers.keccak256(data);
+    // Pre-compute selector expected in TransactionExecuted event.
+    const selector = target.interface.getFunction("ok").selector;
 
     // Use a high feeTransferGasLimit to guarantee we don't exceed it and therefore don't emit gas-limit-exceeded.
     const gaslessTx = makeGaslessTx({
@@ -441,7 +440,7 @@ describe("Tangem7702GaslessExecutor", function () {
     // TransactionExecuted must still be emitted after fee processing succeeds.
     await expect(tx)
       .to.emit(executor, "TransactionExecuted")
-      .withArgs(executorEOA.address, 0n, await target.getAddress(), 0n, dataHash);
+      .withArgs(executorEOA.address, 0n, await target.getAddress(), 0n, selector);
 
     // Nonce must increment after a successful end-to-end execution.
     expect(await executor.nonce()).to.equal(1n);
