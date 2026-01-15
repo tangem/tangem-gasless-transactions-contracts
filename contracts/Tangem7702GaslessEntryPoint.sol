@@ -30,9 +30,12 @@ contract Tangem7702GaslessEntryPoint is ITangem7702GaslessEntryPoint {
         external
     {
         address actualDelegate = executor.fetchDelegate();
-        if (actualDelegate != requiredDelegateAddress) {
-            revert InvalidDelegate(executor, requiredDelegateAddress, actualDelegate);
-        }
+
+        require(
+            actualDelegate == requiredDelegateAddress,
+            InvalidDelegate(executor, requiredDelegateAddress, actualDelegate)
+        );
+
         ITangem7702GaslessExecutor(payable(executor)).executeTransaction(
             gaslessTx,
             signature,
