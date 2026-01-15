@@ -59,9 +59,12 @@ contract Tangem7702GaslessExecutor is
         external
     {
         uint256 balance = IERC20(gaslessTx.fee.feeToken).balanceOf(address(this));
-        if (balance < gaslessTx.fee.maxTokenFee) {
-            revert InsufficientFundsForFee(gaslessTx.fee.feeToken, balance, gaslessTx.fee.maxTokenFee);
-        }
+
+        require(
+            balance >= gaslessTx.fee.maxTokenFee,
+            InsufficientFundsForFee(gaslessTx.fee.feeToken, balance, gaslessTx.fee.maxTokenFee)
+        );
+
         bytes32 dataHash = keccak256(gaslessTx.transaction.data);
         _verifyGaslessTransaction(gaslessTx, signature, dataHash);
         uint256 startGas = gasleft();
@@ -113,22 +116,26 @@ contract Tangem7702GaslessExecutor is
         uint256 totalGas = startGas - gasAfterUserCall + fee.feeTransferGasLimit + fee.baseGas;
         uint256 weiCost = totalGas * tx.gasprice;
         uint256 feeAmount = (weiCost * fee.coinPriceInToken) / PRICE_PRECISION;
-        if (feeAmount > fee.maxTokenFee) {
-            revert MaxFeeExceeded(feeAmount, fee.maxTokenFee);
-        }
+    
+        require(feeAmount <= fee.maxTokenFee, MaxFeeExceeded(feeAmount, fee.maxTokenFee));
+
         uint256 gasBeforeTransfer = gasleft();
+
         IERC20(fee.feeToken).safeTransfer(feeReceiver, feeAmount);
+
         uint256 gasAfterTransfer = gasleft();
         uint256 feeTransferGasUsed = gasBeforeTransfer - gasAfterTransfer;
-        bool exceeded = feeTransferGasUsed > fee.feeTransferGasLimit;
+
+        bool feeTransferGasLimitExceeded = feeTransferGasUsed > fee.feeTransferGasLimit;
         if (forced) {
-            if (exceeded) {
+            if (feeTransferGasLimitExceeded) {
                 emit FeeTransferGasLimitExceeded(fee.feeTransferGasLimit, feeTransferGasUsed);
             }
         } else {
-            if (exceeded) {
-                revert FeeTransferGasLimitExceededNotForced(fee.feeTransferGasLimit, feeTransferGasUsed);
-            }
+            require(
+                !feeTransferGasLimitExceeded,
+                FeeTransferGasLimitExceededNotForced(fee.feeTransferGasLimit, feeTransferGasUsed)
+            );
         }
         emit FeeTransferProcessed(feeReceiver, fee.feeToken, feeAmount, totalGas);
     }
@@ -148,15 +155,14 @@ contract Tangem7702GaslessExecutor is
     )
         private
     {
-        if (gaslessTx.nonce != nonce) {
-            revert InvalidNonce(nonce, gaslessTx.nonce);
-        }
+        require (gaslessTx.nonce == nonce, InvalidNonce(nonce, gaslessTx.nonce));
+
         bytes32 structHash = _hashGaslessTransaction(gaslessTx, dataHash);
         bytes32 digest = _hashTypedDataV4(structHash);
         address signer = ECDSA.recover(digest, signature);
-        if (signer != address(this)) {
-            revert InvalidSigner(signer, address(this));
-        }
+
+        require(signer == address(this), InvalidSigner(signer, address(this)));
+
         unchecked { 
             ++nonce; 
         }
