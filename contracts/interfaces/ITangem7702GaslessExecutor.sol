@@ -53,8 +53,7 @@ interface ITangem7702GaslessExecutor {
     /// @param to Target contract address that was called.
     /// @param value Native coin value sent with the call.
     /// @param selector First 4 bytes of calldata (function selector), or 0x00000000 if calldata is shorter than 4 bytes.
-    /// @param dataHash Keccak256 hash of the calldata.
-    error ExecutionFailed(address to, uint256 value, bytes4 selector, bytes32 dataHash);
+    error ExecutionFailed(address to, uint256 value, bytes4 selector);
 
     /// @notice Thrown when the computed fee exceeds `maxTokenFee`.
     /// @dev The computed fee is derived from measured gas and `coinPriceInToken`.
@@ -86,13 +85,13 @@ interface ITangem7702GaslessExecutor {
     /// @param nonce The nonce value used by the signed payload.
     /// @param to The target contract that was called.
     /// @param value Native coin value sent with the call.
-    /// @param dataHash Keccak256 hash of the calldata.
+    /// @param selector First 4 bytes of calldata (function selector), or 0x00000000 if calldata is shorter than 4 bytes.
     event TransactionExecuted(
         address indexed executor,
         uint256 indexed nonce,
         address indexed to,
         uint256 value,
-        bytes32 dataHash
+        bytes4 selector
     );
 
     /// @notice Emitted after the fee token transfer is processed.
