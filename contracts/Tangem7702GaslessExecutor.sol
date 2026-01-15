@@ -19,36 +19,19 @@ contract Tangem7702GaslessExecutor is
     ///      Using 1e18 keeps the math consistent with ETH-denominated gas costs.
     uint256 private constant PRICE_PRECISION = 1 ether;
 
-    /// @notice Canonical EIP-712 type string for `GaslessTransaction`.
-    /// @dev Must exactly match the struct definition and field ordering used for signing.
-    ///      This string is concatenated with `FEE_TYPE` and `TRANSACTION_TYPE` when computing
-    ///      `GASLESS_TRANSACTION_TYPEHASH` (per EIP-712 encoding rules for nested structs).
+    // EIP-712 types
     string private constant GASLESS_TRANSACTION_TYPE =
         "GaslessTransaction(Transaction transaction,Fee fee,uint256 nonce)";
-
-    /// @notice Canonical EIP-712 type string for `Fee`.
-    /// @dev Must exactly match the struct definition and field ordering used for signing.
     string private constant FEE_TYPE =
         "Fee(address feeToken,uint256 maxTokenFee,uint256 coinPriceInToken,uint256 feeTransferGasLimit,uint256 baseGas)";
-
-    /// @notice Canonical EIP-712 type string for `Transaction`.
-    /// @dev Must exactly match the struct definition and field ordering used for signing.
     string private constant TRANSACTION_TYPE =
         "Transaction(address to,uint256 value,bytes data)";
 
-    /// @notice EIP-712 type hash for `GaslessTransaction` including nested type definitions.
-    /// @dev Computed as `keccak256(abi.encodePacked(GASLESS_TRANSACTION_TYPE, FEE_TYPE, TRANSACTION_TYPE))`.
-    ///      The concatenation order is critical and must not be changed, otherwise signatures will break.
+    // EIP-712 type hashes
     bytes32 private constant GASLESS_TRANSACTION_TYPEHASH = keccak256(
         abi.encodePacked(GASLESS_TRANSACTION_TYPE, FEE_TYPE, TRANSACTION_TYPE)
     );
-
-    /// @notice EIP-712 type hash for `Fee`.
-    /// @dev Computed as `keccak256(bytes(FEE_TYPE))`. Any change to `FEE_TYPE` breaks signature compatibility.
     bytes32 private constant FEE_TYPEHASH = keccak256(bytes(FEE_TYPE));
-
-    /// @notice EIP-712 type hash for `Transaction`.
-    /// @dev Computed as `keccak256(bytes(TRANSACTION_TYPE))`. Any change to `TRANSACTION_TYPE` breaks signature compatibility.
     bytes32 private constant TRANSACTION_TYPEHASH = keccak256(bytes(TRANSACTION_TYPE));
 
     /// @inheritdoc ITangem7702GaslessExecutor
