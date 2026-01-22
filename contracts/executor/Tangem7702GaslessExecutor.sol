@@ -2,13 +2,16 @@
 pragma solidity 0.8.33;
 
 import {IERC20, SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ERC721Holder} from "@openzeppelin/contracts/token/ERC721/utils/ERC721Holder.sol";
+import {IERC721Receiver} from "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
+import {ERC1155Holder} from "@openzeppelin/contracts/token/ERC1155/utils/ERC1155Holder.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 import {ITangem7702GaslessExecutor} from "../interfaces/ITangem7702GaslessExecutor.sol";
 
-// layout at keccak256(abi.encode(uint256(keccak256(bytes(tangem.storage.Tangem7702GaslessExecutor))) - 1)) & ~bytes32(uint256(0xff))
-abstract contract Tangem7702GaslessExecutor is EIP712, ITangem7702GaslessExecutor {
+// layout should be at keccak256(abi.encode(uint256(keccak256(bytes(tangem.storage.Tangem7702GaslessExecutor))) - 1)) & ~bytes32(uint256(0xff))
+abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Holder, ITangem7702GaslessExecutor {
     using SafeERC20 for IERC20;
 
     /// @notice Fixed-point precision used for `coinPriceInToken` calculations.
@@ -234,4 +237,15 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ITangem7702GaslessExecuto
     /// @notice Get L1 data fee in wei for the current transaction
     /// @dev Should return 0 for non-L2 chains
     function _getL1Fee() internal view virtual returns (uint256);
+
+    function supportsInterface(bytes4 interfaceId) 
+        public 
+        view 
+        virtual 
+        override
+        returns (bool) 
+    {
+        return interfaceId == type(IERC721Receiver).interfaceId ||
+               super.supportsInterface(interfaceId);
+    }
 }
