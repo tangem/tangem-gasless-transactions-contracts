@@ -9,7 +9,7 @@ const conn = await hre.network.connect();
 
 // Build a minimal GaslessTransaction object that matches the EntryPoint ABI.
 // We intentionally keep fee fields mostly zeroed here because EntryPoint only forwards them.
-function makeGaslessTx({ to, value, data, feeToken, maxTokenFee, nonce }) {
+function makeGaslessTx({ to, value, data, feeToken, maxTokenFee, feeReceiver, nonce }) {
   // Encode the nested struct exactly as Solidity expects: { transaction: {...}, fee: {...}, nonce }
   return {
     // Target call parameters that the executor will perform.
@@ -24,6 +24,7 @@ function makeGaslessTx({ to, value, data, feeToken, maxTokenFee, nonce }) {
       coinPriceInToken: 0n,
       feeTransferGasLimit: 0n,
       baseGas: 0n,
+      feeReceiver: feeReceiver
     },
 
     // Nonce is part of the signed payload; EntryPoint doesn’t validate it, executor does.
@@ -109,6 +110,7 @@ describe("Tangem7702GaslessEntryPoint", function () {
       data: "0x",
       feeToken: ethers.ZeroAddress,
       maxTokenFee: 0n,
+      feeReceiver: feeReceiverEOA.address,
       nonce: 0n,
     });
 
@@ -120,8 +122,6 @@ describe("Tangem7702GaslessEntryPoint", function () {
         gaslessTx,
         // Signature is not validated by EntryPoint.
         "0x1234",
-        // Fee receiver forwarded as-is.
-        feeReceiverEOA.address,
         // Forced flag forwarded as-is.
         false,
         // Executor EOA is the account whose delegate must match.
@@ -158,6 +158,7 @@ describe("Tangem7702GaslessEntryPoint", function () {
       data: "0x",
       feeToken: ethers.ZeroAddress,
       maxTokenFee: 0n,
+      feeReceiver: feeReceiverEOA.address,
       nonce: 0n,
     });
 
@@ -166,7 +167,6 @@ describe("Tangem7702GaslessEntryPoint", function () {
       entryPoint.executeTransaction(
         gaslessTx,
         "0x1234",
-        feeReceiverEOA.address,
         false,
         executorEOA.address
       )
@@ -206,6 +206,7 @@ describe("Tangem7702GaslessEntryPoint", function () {
       data: txData,
       feeToken: ethers.ZeroAddress,
       maxTokenFee: 999n,
+      feeReceiver: feeReceiverEOA.address,
       nonce: 777n,
     });
 
@@ -216,7 +217,6 @@ describe("Tangem7702GaslessEntryPoint", function () {
       .executeTransaction(
         gaslessTx,
         signature,
-        feeReceiverEOA.address,
         true,
         executorEOA.address
       );

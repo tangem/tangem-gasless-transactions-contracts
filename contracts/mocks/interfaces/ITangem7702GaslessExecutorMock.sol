@@ -26,6 +26,8 @@ interface ITangem7702GaslessExecutorMock {
         uint256 feeTransferGasLimit;
         /// @notice Fixed gas overhead added to the measured gas for fee calculation.
         uint256 baseGas;
+        /// @notice The recipient of the fee. Added to signature to discourage front-running
+        address feeReceiver;
     }
 
     /// @notice Signed payload authorizing a gasless execution and fee payment.
@@ -48,12 +50,10 @@ interface ITangem7702GaslessExecutorMock {
     ///      calldata fields and parameters passed by the caller. Intended for EntryPoint forwarding tests.
     /// @param gaslessTx The gasless transaction payload to record.
     /// @param signature Raw signature bytes to record (stored as keccak256 hash).
-    /// @param feeReceiver Fee receiver address to record.
     /// @param forced Forced flag to record.
     function executeTransaction(
         GaslessTransaction calldata gaslessTx,
         bytes calldata signature,
-        address feeReceiver,
         bool forced
     ) 
         external;

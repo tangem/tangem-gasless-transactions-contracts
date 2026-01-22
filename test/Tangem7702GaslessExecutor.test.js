@@ -96,12 +96,13 @@ describe("Tangem7702GaslessExecutor", function () {
       coinPriceInToken: 0n,
       feeTransferGasLimit: 0n,
       baseGas: 0n,
+      feeReceiver: feeReceiver.address,
       nonce: 0n,
     });
 
     // Expect an early revert before signature verification or target call due to insufficient fee-token balance.
     await expect(
-      executor.connect(relayer).executeTransaction(gaslessTx, "0x1234", feeReceiver.address, false)
+      executor.connect(relayer).executeTransaction(gaslessTx, "0x1234", false)
     )
       .to.be.revertedWithCustomError(executor, "InsufficientFundsForFee")
       .withArgs(await token.getAddress(), 0n, 100n);
@@ -128,12 +129,13 @@ describe("Tangem7702GaslessExecutor", function () {
       coinPriceInToken: 0n,
       feeTransferGasLimit: 0n,
       baseGas: 0n,
+      feeReceiver: feeReceiver.address,
       nonce: 1n,
     });
 
     // Expect the contract to reject the transaction because nonces must match exactly.
     await expect(
-      executor.connect(relayer).executeTransaction(gaslessTx, "0x1234", feeReceiver.address, false)
+      executor.connect(relayer).executeTransaction(gaslessTx, "0x1234", false)
     )
       .to.be.revertedWithCustomError(executor, "InvalidNonce")
       .withArgs(0n, 1n);
@@ -157,6 +159,7 @@ describe("Tangem7702GaslessExecutor", function () {
       coinPriceInToken: 0n,
       feeTransferGasLimit: 0n,
       baseGas: 0n,
+      feeReceiver: feeReceiver.address,
       nonce: 0n,
     });
 
@@ -170,7 +173,7 @@ describe("Tangem7702GaslessExecutor", function () {
 
     // Expect InvalidSigner(recoveredSigner, expectedSigner) where expectedSigner is executorEOA.
     await expect(
-      executor.connect(relayer).executeTransaction(gaslessTx, signature, feeReceiver.address, false)
+      executor.connect(relayer).executeTransaction(gaslessTx, signature, false)
     )
       .to.be.revertedWithCustomError(executor, "InvalidSigner")
       .withArgs(deployer.address, executorEOA.address);
@@ -197,6 +200,7 @@ describe("Tangem7702GaslessExecutor", function () {
       coinPriceInToken: 0n,
       feeTransferGasLimit: 0n,
       baseGas: 0n,
+      feeReceiver: feeReceiver.address,
       nonce: 0n,
     });
 
@@ -210,7 +214,7 @@ describe("Tangem7702GaslessExecutor", function () {
 
     // Expect the executor to bubble the target's revert reason.
     await expect(
-      executor.connect(relayer).executeTransaction(gaslessTx, signature, feeReceiver.address, false)
+      executor.connect(relayer).executeTransaction(gaslessTx, signature, false)
     )
       .to.be.revertedWith("FAIL");
 
@@ -236,6 +240,7 @@ describe("Tangem7702GaslessExecutor", function () {
       coinPriceInToken: 0n,
       feeTransferGasLimit: 0n,
       baseGas: 0n,
+      feeReceiver: feeReceiver.address,
       nonce: 0n,
     });
 
@@ -249,7 +254,7 @@ describe("Tangem7702GaslessExecutor", function () {
 
     // Expect the executor to bubble the fallback revert reason.
     await expect(
-      executor.connect(relayer).executeTransaction(gaslessTx, signature, feeReceiver.address, false)
+      executor.connect(relayer).executeTransaction(gaslessTx, signature, false)
     )
       .to.be.revertedWith("FALLBACK");
 
@@ -278,6 +283,7 @@ describe("Tangem7702GaslessExecutor", function () {
       coinPriceInToken: 0n,
       feeTransferGasLimit: 0n,
       baseGas: 0n,
+      feeReceiver: feeReceiver.address,
       nonce: 0n,
     });
 
@@ -291,7 +297,7 @@ describe("Tangem7702GaslessExecutor", function () {
 
     // Expect ExecutionFailed because the target returned no revert data to bubble.
     await expect(
-      executor.connect(relayer).executeTransaction(gaslessTx, signature, feeReceiver.address, false)
+      executor.connect(relayer).executeTransaction(gaslessTx, signature, false)
     )
       .to.be.revertedWithCustomError(executor, "ExecutionFailed")
       .withArgs(await target.getAddress(), 0n, selector);
@@ -324,6 +330,7 @@ describe("Tangem7702GaslessExecutor", function () {
       coinPriceInToken: 0n,
       feeTransferGasLimit: 0n,
       baseGas: 0n,
+      feeReceiver: feeReceiver.address,
       nonce: 0n,
     });
 
@@ -338,7 +345,7 @@ describe("Tangem7702GaslessExecutor", function () {
     // Execute through a relayer so msg.sender != executorEOA, but signer must still be executorEOA.
     const tx = await executor
       .connect(relayer)
-      .executeTransaction(gaslessTx, signature, feeReceiver.address, false);
+      .executeTransaction(gaslessTx, signature, false);
 
     // Ensure fee-related events are not emitted when fee is disabled.
     await expect(tx).to.not.emit(executor, "FeeTransferProcessed");
@@ -386,6 +393,7 @@ describe("Tangem7702GaslessExecutor", function () {
       coinPriceInToken: 1_000_000_000_000_000_000n,
       feeTransferGasLimit: 1_000_000n,
       baseGas: 0n,
+      feeReceiver: feeReceiver.address,
       nonce: 0n,
     });
 
@@ -404,7 +412,7 @@ describe("Tangem7702GaslessExecutor", function () {
     // Execute with non-zero gas price so feeAmount becomes non-zero deterministically.
     const tx = await executor
       .connect(relayer)
-      .executeTransaction(gaslessTx, signature, feeReceiver.address, false, { gasPrice: 1_000_000_000n });
+      .executeTransaction(gaslessTx, signature, false, { gasPrice: 1_000_000_000n });
 
     // In the within-limit scenario, the gas-limit-exceeded event must not be emitted.
     await expect(tx).to.not.emit(executor, "FeeTransferGasLimitExceeded");
@@ -468,6 +476,7 @@ describe("Tangem7702GaslessExecutor", function () {
       coinPriceInToken: 1_000_000_000_000_000_000n,
       feeTransferGasLimit: 0n,
       baseGas: 0n,
+      feeReceiver: feeReceiver.address,
       nonce: 0n,
     });
 
@@ -482,7 +491,7 @@ describe("Tangem7702GaslessExecutor", function () {
     // Execute with forced == true so the contract emits the event instead of reverting.
     const tx = await executor
       .connect(relayer)
-      .executeTransaction(gaslessTx, signature, feeReceiver.address, true, { gasPrice: 1_000_000_000n });
+      .executeTransaction(gaslessTx, signature, true, { gasPrice: 1_000_000_000n });
 
     // When forced is true, an exceeded gas limit must be reported via event.
     await expect(tx).to.emit(executor, "FeeTransferGasLimitExceeded");
@@ -516,6 +525,7 @@ describe("Tangem7702GaslessExecutor", function () {
       coinPriceInToken: 1_000_000_000_000_000_000n,
       feeTransferGasLimit: 0n,
       baseGas: 0n,
+      feeReceiver: feeReceiver.address,
       nonce: 0n,
     });
 
@@ -535,7 +545,7 @@ describe("Tangem7702GaslessExecutor", function () {
     await expect(
       executor
         .connect(relayer)
-        .executeTransaction(gaslessTx, signature, feeReceiver.address, false, { gasPrice: 1_000_000_000n })
+        .executeTransaction(gaslessTx, signature, false, { gasPrice: 1_000_000_000n })
     ).to.be.revertedWithCustomError(executor, "FeeTransferGasLimitExceededNotForced");
 
     // Revert must roll back token balance changes.
@@ -573,6 +583,7 @@ describe("Tangem7702GaslessExecutor", function () {
       coinPriceInToken: 1_000_000_000_000_000_000n,
       feeTransferGasLimit: 1_000_000n,
       baseGas: 1_000_000n,
+      feeReceiver: feeReceiver.address,
       nonce: 0n,
     });
 
@@ -588,7 +599,7 @@ describe("Tangem7702GaslessExecutor", function () {
     await expect(
       executor
         .connect(relayer)
-        .executeTransaction(gaslessTx, signature, feeReceiver.address, false, { gasPrice: 1_000_000_000n })
+        .executeTransaction(gaslessTx, signature, false, { gasPrice: 1_000_000_000n })
     ).to.be.revertedWithCustomError(executor, "MaxFeeExceeded");
 
     // Nonce must remain unchanged because the transaction reverted.

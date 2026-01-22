@@ -20,7 +20,7 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ITangem7702GaslessExecuto
     string private constant GASLESS_TRANSACTION_TYPE =
         "GaslessTransaction(Transaction transaction,Fee fee,uint256 nonce)";
     string private constant FEE_TYPE =
-        "Fee(address feeToken,uint256 maxTokenFee,uint256 coinPriceInToken,uint256 feeTransferGasLimit,uint256 baseGas)";
+        "Fee(address feeToken,uint256 maxTokenFee,uint256 coinPriceInToken,uint256 feeTransferGasLimit,uint256 baseGas,address feeReceiver)";
     string private constant TRANSACTION_TYPE =
         "Transaction(address to,uint256 value,bytes data)";
 
@@ -50,7 +50,6 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ITangem7702GaslessExecuto
     function executeTransaction(
         GaslessTransaction calldata gaslessTx,
         bytes calldata signature,
-        address feeReceiver,
         bool forced
     ) 
         external
@@ -82,7 +81,7 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ITangem7702GaslessExecuto
         }
 
         if (gaslessTx.fee.coinPriceInToken > 0) {
-            _processFeeTransfer(gaslessTx.fee, feeReceiver, startGas, forced);
+            _processFeeTransfer(gaslessTx.fee, startGas, forced);
         }
 
         emit TransactionExecuted(
@@ -101,12 +100,10 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ITangem7702GaslessExecuto
     ///      using `fee.coinPriceInToken / PRICE_PRECISION`. Measures the gas spent by the
     ///      fee transfer itself and enforces `feeTransferGasLimit` depending on `forced`.
     /// @param fee Fee parameters used for computation and the token transfer.
-    /// @param feeReceiver Recipient of the fee in `fee.feeToken`.
     /// @param startGas Gas snapshot taken before executing the target call.
     /// @param forced If true, exceeding `feeTransferGasLimit` is reported via an event; otherwise it reverts.
     function _processFeeTransfer(
         Fee calldata fee,
-        address feeReceiver,
         uint256 startGas,
         bool forced
     )
@@ -126,7 +123,7 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ITangem7702GaslessExecuto
 
         uint256 gasBeforeTransfer = gasleft();
 
-        IERC20(fee.feeToken).safeTransfer(feeReceiver, feeAmount);
+        IERC20(fee.feeToken).safeTransfer(fee.feeReceiver, feeAmount);
 
         uint256 gasAfterTransfer = gasleft();
         uint256 feeTransferGasUsed = gasBeforeTransfer - gasAfterTransfer;
@@ -143,7 +140,7 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ITangem7702GaslessExecuto
             );
         }
 
-        emit FeeTransferProcessed(feeReceiver, fee.feeToken, feeAmount, totalGas, l1Fee);
+        emit FeeTransferProcessed(fee.feeReceiver, fee.feeToken, feeAmount, totalGas, l1Fee);
     }
 
     /// @notice Verifies a gasless transaction EIP-712 signature and consumes the nonce.
@@ -193,7 +190,8 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ITangem7702GaslessExecuto
                 fee.maxTokenFee,
                 fee.coinPriceInToken,
                 fee.feeTransferGasLimit,
-                fee.baseGas
+                fee.baseGas,
+                fee.feeReceiver
             )
         );
     }
