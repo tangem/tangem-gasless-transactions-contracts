@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.33;
-import {Tangem7702GaslessExecutor} from "../Tangem7702GaslessExecutor.sol";
+import {Tangem7702GaslessExecutor} from "./Tangem7702GaslessExecutor.sol";
 
 /// @notice Interface for Arbitrum ArbGasInfo precompile
 interface IArbGasInfo {
