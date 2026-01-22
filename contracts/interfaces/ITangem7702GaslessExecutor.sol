@@ -45,8 +45,8 @@ interface ITangem7702GaslessExecutor {
     /// @dev This is checked early to fail fast before signature verification and execution.
     /// @param feeToken The ERC-20 fee token address.
     /// @param balance Current `feeToken` balance of the executor account.
-    /// @param maxTokenFee Maximum fee required by the signed payload.
-    error InsufficientFundsForFee(address feeToken, uint256 balance, uint256 maxTokenFee);
+    /// @param fee Calculated token fee.
+    error InsufficientFundsForFee(address feeToken, uint256 balance, uint256 fee);
 
     /// @notice Thrown when the target call fails without revert data.
     /// @dev If the target reverts with non-empty revert data (custom error / Error(string) / Panic(uint256)),

@@ -57,12 +57,6 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
     ) 
         external
     {
-        uint256 balance = IERC20(gaslessTx.fee.feeToken).balanceOf(address(this));
-
-        require(
-            balance >= gaslessTx.fee.maxTokenFee,
-            InsufficientFundsForFee(gaslessTx.fee.feeToken, balance, gaslessTx.fee.maxTokenFee)
-        );
         _verifyGaslessTransaction(gaslessTx, signature);
 
         uint256 startGas = gasleft();
@@ -133,6 +127,12 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
         require(feeAmount <= fee.maxTokenFee, MaxFeeExceeded(feeAmount, fee.maxTokenFee));
 
         uint256 gasBeforeTransfer = gasleft();
+
+        uint256 balance = IERC20(fee.feeToken).balanceOf(address(this));
+        require(
+            balance >= feeAmount,
+            InsufficientFundsForFee(fee.feeToken, balance, feeAmount)
+        );
 
         IERC20(fee.feeToken).safeTransfer(fee.feeReceiver, feeAmount);
 

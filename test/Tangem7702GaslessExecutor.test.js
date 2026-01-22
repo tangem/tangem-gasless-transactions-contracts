@@ -80,7 +80,7 @@ describe("Tangem7702GaslessExecutor", function () {
 
   it("Reverts with InsufficientFundsForFee when fee token balance is below maxTokenFee", async function () {
     // Load fresh fixture state for this test.
-    const { executor, token, target, feeReceiver, relayer } =
+    const { executor, token, target, feeReceiver, relayer, executorEOA } =
       await networkHelpers.loadFixture(deployExecutorFixture);
 
     // Encode a successful target call so any revert comes from executor pre-checks.
@@ -92,20 +92,27 @@ describe("Tangem7702GaslessExecutor", function () {
       value: 0n,
       data,
       feeToken: await token.getAddress(),
-      maxTokenFee: 100n,
-      coinPriceInToken: 0n,
-      feeTransferGasLimit: 0n,
-      baseGas: 0n,
+      maxTokenFee: 1000000n,
+      coinPriceInToken: 500000n,
+      feeTransferGasLimit: 100n,
+      baseGas: 100n,
       feeReceiver: feeReceiver.address,
       nonce: 0n,
     });
 
-    // Expect an early revert before signature verification or target call due to insufficient fee-token balance.
+    const { signature } = await signGaslessTx({
+      conn,
+      executorSigner: await ethers.getSigner(executorEOA.address),
+      executorAddress: executorEOA.address,
+      gaslessTx,
+    });
+
+    // Expect an revert due to insufficient fee-token balance.
     await expect(
-      executor.connect(relayer).executeTransaction(gaslessTx, "0x1234", false)
+      executor.connect(relayer).executeTransaction(gaslessTx, signature, false)
     )
       .to.be.revertedWithCustomError(executor, "InsufficientFundsForFee")
-      .withArgs(await token.getAddress(), 0n, 100n);
+      .withArgs(await token.getAddress(), 0n, 15n); // got 15 experimentally
   });
 
   it("Reverts with InvalidNonce when provided nonce does not match stored nonce", async function () {
