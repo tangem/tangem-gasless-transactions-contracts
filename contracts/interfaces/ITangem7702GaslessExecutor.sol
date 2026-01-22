@@ -104,7 +104,8 @@ interface ITangem7702GaslessExecutor {
         address indexed feeReceiver,
         address indexed feeToken,
         uint256 feeAmount,
-        uint256 totalGas
+        uint256 totalGas,
+        uint256 l1Fee
     );
 
     /// @notice Emitted when the fee transfer gas usage exceeds `feeTransferGasLimit`.

@@ -22,7 +22,7 @@ async function deployExecutorFixture() {
   const [deployer, executorEOA, relayer, feeReceiver] = await ethers.getSigners();
 
   // Deploy the executor implementation contract (we will copy its runtime code to executorEOA).
-  const ExecutorImpl = await ethers.getContractFactory("Tangem7702GaslessExecutor", deployer);
+  const ExecutorImpl = await ethers.getContractFactory("Tangem7702GaslessExecutorL1", deployer);
   const impl = await ExecutorImpl.deploy();
 
   // Wait until the deployment transaction is mined and the contract is available.

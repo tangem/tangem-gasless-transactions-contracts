@@ -7,11 +7,8 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 import {ITangem7702GaslessExecutor} from "./interfaces/ITangem7702GaslessExecutor.sol";
 
-contract Tangem7702GaslessExecutor is 
-    EIP712,
-    ITangem7702GaslessExecutor 
-    layout at 0x63126cb0ee213fd665c396acd692b9c0a13c8cc8bbd732af4f146bb546be9800 
-{
+// layout at keccak256(abi.encode(uint256(keccak256(bytes(tangem.storage.Tangem7702GaslessExecutor))) - 1)) & ~bytes32(uint256(0xff))
+abstract contract Tangem7702GaslessExecutor is EIP712, ITangem7702GaslessExecutor {
     using SafeERC20 for IERC20;
 
     /// @notice Fixed-point precision used for `coinPriceInToken` calculations.
@@ -118,6 +115,11 @@ contract Tangem7702GaslessExecutor is
         uint256 gasAfterUserCall = gasleft();
         uint256 totalGas = startGas - gasAfterUserCall + fee.feeTransferGasLimit + fee.baseGas;
         uint256 weiCost = totalGas * tx.gasprice;
+
+        // Add L1 data fee for L2 networks
+        uint256 l1Fee = _getL1Fee();
+        weiCost += l1Fee;
+
         uint256 feeAmount = (weiCost * fee.coinPriceInToken) / PRICE_PRECISION;
     
         require(feeAmount <= fee.maxTokenFee, MaxFeeExceeded(feeAmount, fee.maxTokenFee));
@@ -141,7 +143,7 @@ contract Tangem7702GaslessExecutor is
             );
         }
 
-        emit FeeTransferProcessed(feeReceiver, fee.feeToken, feeAmount, totalGas);
+        emit FeeTransferProcessed(feeReceiver, fee.feeToken, feeAmount, totalGas, l1Fee);
     }
 
     /// @notice Verifies a gasless transaction EIP-712 signature and consumes the nonce.
@@ -222,4 +224,8 @@ contract Tangem7702GaslessExecutor is
             }
         }
     }
+
+    /// @notice Get L1 data fee in wei for the current transaction
+    /// @dev Should return 0 for non-L2 chains
+    function _getL1Fee() internal view virtual returns (uint256);
 }
