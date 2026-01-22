@@ -52,10 +52,11 @@ interface ITangem7702GaslessExecutor {
     /// @dev If the target reverts with non-empty revert data (custom error / Error(string) / Panic(uint256)),
     ///      the executor bubbles that revert data instead of using this error.
     ///      `selector` and `dataHash` identify the intended calldata without returning the full bytes payload.
+    ///      When `forced` is true, the executor emits {ExecutionFailed} instead of reverting.
     /// @param to Target contract address that was called.
     /// @param value Native coin value sent with the call.
     /// @param selector First 4 bytes of calldata (function selector), or 0x00000000 if calldata is shorter than 4 bytes.
-    error ExecutionFailed(address to, uint256 value, bytes4 selector);
+    error ExecutionFailedNotForced(address to, uint256 value, bytes4 selector);
 
     /// @notice Thrown when the computed fee exceeds `maxTokenFee`.
     /// @dev The computed fee is derived from measured gas and `coinPriceInToken`.
@@ -116,6 +117,13 @@ interface ITangem7702GaslessExecutor {
     /// @param gasUsed The measured gas used by the fee transfer.
     event FeeTransferGasLimitExceeded(uint256 gasLimit, uint256 gasUsed);
 
+    /// @notice Emitted when the target call fails.
+    /// @dev This event is emitted only when `forced` is true; otherwise the call reverts.
+    /// @param to Target contract address that was called.
+    /// @param value Native coin value sent with the call.
+    /// @param selector First 4 bytes of calldata (function selector), or 0x00000000 if calldata is shorter than 4 bytes.
+    event ExecutionFailed(address indexed to, uint256 value, bytes4 selector);
+
     /// @notice Allows the executor account to receive native coin (ETH).
     /// @dev Required to support value transfers and funding the account.
     receive() external payable;
@@ -136,7 +144,7 @@ interface ITangem7702GaslessExecutor {
     ///      Fee processing is executed only when `gaslessTx.fee.coinPriceInToken > 0`.
     /// @param gaslessTx The signed payload containing the target call, fee parameters, and nonce.
     /// @param signature The EIP-712 signature over `gaslessTx` produced by the executor account.
-    /// @param forced If true, exceeding `feeTransferGasLimit` is reported via an event; otherwise it reverts.
+    /// @param forced If true, exceeding `feeTransferGasLimit` and call failure are reported via an event; otherwise they revert.
     function executeTransaction(
         GaslessTransaction calldata gaslessTx,
         bytes calldata signature,

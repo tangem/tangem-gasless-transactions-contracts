@@ -68,15 +68,23 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ITangem7702GaslessExecuto
             gaslessTx.transaction.to.call{value: gaslessTx.transaction.value}(gaslessTx.transaction.data);
 
         if (!success) {
-            if (returnData.length == 0) {
-                revert ExecutionFailed(
+            if (forced) {
+                emit ExecutionFailed(
                     gaslessTx.transaction.to,
                     gaslessTx.transaction.value,
                     _selector(gaslessTx.transaction.data)
                 );
-            }
-            assembly {
-                revert(add(returnData, 0x20), mload(returnData))
+            } else {
+                if (returnData.length == 0) {
+                    revert ExecutionFailedNotForced(
+                        gaslessTx.transaction.to,
+                        gaslessTx.transaction.value,
+                        _selector(gaslessTx.transaction.data)
+                    );
+                }
+                assembly {
+                    revert(add(returnData, 0x20), mload(returnData))
+                }
             }
         }
 
