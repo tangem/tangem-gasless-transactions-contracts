@@ -5,7 +5,7 @@ import {IERC20, SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeE
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
-import {ITangem7702GaslessExecutor} from "./interfaces/ITangem7702GaslessExecutor.sol";
+import {ITangem7702GaslessExecutor} from "../interfaces/ITangem7702GaslessExecutor.sol";
 
 // layout at keccak256(abi.encode(uint256(keccak256(bytes(tangem.storage.Tangem7702GaslessExecutor))) - 1)) & ~bytes32(uint256(0xff))
 abstract contract Tangem7702GaslessExecutor is EIP712, ITangem7702GaslessExecutor {
