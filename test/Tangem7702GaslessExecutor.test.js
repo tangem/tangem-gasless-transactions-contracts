@@ -299,7 +299,7 @@ describe("Tangem7702GaslessExecutor", function () {
     await expect(
       executor.connect(relayer).executeTransaction(gaslessTx, signature, false)
     )
-      .to.be.revertedWithCustomError(executor, "ExecutionFailed")
+      .to.be.revertedWithCustomError(executor, "ExecutionFailedNotForced")
       .withArgs(await target.getAddress(), 0n, selector);
 
     // Confirm nonce increment is rolled back because the whole call reverted.
