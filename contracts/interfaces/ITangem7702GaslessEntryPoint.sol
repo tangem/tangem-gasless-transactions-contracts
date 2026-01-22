@@ -15,13 +15,11 @@ interface ITangem7702GaslessEntryPoint {
     /// @dev Reverts with {InvalidDelegate} if `executor` is not currently delegating to the required executor implementation.
     /// @param gaslessTx The gasless transaction payload signed by the `executor` account (EIP-712).
     /// @param signature The EIP-712 signature produced by the `executor` account over `gaslessTx`.
-    /// @param feeReceiver The address that receives the fee paid in `gaslessTx.fee.feeToken`.
     /// @param forced If true, exceeding `feeTransferGasLimit` is reported via an event; otherwise it reverts.
     /// @param executor The EOA executing the call (an EIP-7702 delegating account).
     function executeTransaction(
         ITangem7702GaslessExecutor.GaslessTransaction calldata gaslessTx,
         bytes calldata signature,
-        address feeReceiver,
         bool forced,
         address executor
     )

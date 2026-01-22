@@ -26,6 +26,8 @@ interface ITangem7702GaslessExecutor {
         uint256 feeTransferGasLimit;
         /// @notice Fixed gas overhead added to the measured gas for fee calculation.
         uint256 baseGas;
+        /// @notice The recipient of the fee. Added to signature to discourage front-running
+        address feeReceiver;
     }
 
     /// @notice Signed payload authorizing a gasless execution and fee payment.
@@ -134,12 +136,10 @@ interface ITangem7702GaslessExecutor {
     ///      Fee processing is executed only when `gaslessTx.fee.coinPriceInToken > 0`.
     /// @param gaslessTx The signed payload containing the target call, fee parameters, and nonce.
     /// @param signature The EIP-712 signature over `gaslessTx` produced by the executor account.
-    /// @param feeReceiver The recipient of the fee paid in `gaslessTx.fee.feeToken`.
     /// @param forced If true, exceeding `feeTransferGasLimit` is reported via an event; otherwise it reverts.
     function executeTransaction(
         GaslessTransaction calldata gaslessTx,
         bytes calldata signature,
-        address feeReceiver,
         bool forced
     )
         external;

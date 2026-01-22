@@ -44,7 +44,6 @@ contract Tangem7702GaslessExecutorMock is ITangem7702GaslessExecutorMock {
     function executeTransaction(
         GaslessTransaction calldata gaslessTx,
         bytes calldata signature,
-        address feeReceiver,
         bool forced
     ) 
         external 
@@ -53,7 +52,7 @@ contract Tangem7702GaslessExecutorMock is ITangem7702GaslessExecutorMock {
             ++calls;
         }
         lastMsgSender = msg.sender;
-        lastFeeReceiver = feeReceiver;
+        lastFeeReceiver = gaslessTx.fee.feeReceiver;
         lastForced = forced;
         lastTo = gaslessTx.transaction.to;
         lastValue = gaslessTx.transaction.value;

@@ -23,7 +23,6 @@ contract Tangem7702GaslessEntryPoint is ITangem7702GaslessEntryPoint {
     function executeTransaction(
         ITangem7702GaslessExecutor.GaslessTransaction calldata gaslessTx,
         bytes calldata signature,
-        address feeReceiver,
         bool forced,
         address executor
     ) 
@@ -39,7 +38,6 @@ contract Tangem7702GaslessEntryPoint is ITangem7702GaslessEntryPoint {
         ITangem7702GaslessExecutor(payable(executor)).executeTransaction(
             gaslessTx,
             signature,
-            feeReceiver,
             forced
         );
     }

@@ -20,6 +20,7 @@ export const GASLESS_TYPES = {
     { name: "coinPriceInToken", type: "uint256" },
     { name: "feeTransferGasLimit", type: "uint256" },
     { name: "baseGas", type: "uint256" },
+    { name: "feeReceiver", type: "address" },
   ],
   GaslessTransaction: [
     { name: "transaction", type: "Transaction" },
@@ -56,11 +57,12 @@ export function makeGaslessTx({
   coinPriceInToken,
   feeTransferGasLimit,
   baseGas,
+  feeReceiver,
   nonce,
 }) {
   return {
     transaction: { to, value, data },
-    fee: { feeToken, maxTokenFee, coinPriceInToken, feeTransferGasLimit, baseGas },
+    fee: { feeToken, maxTokenFee, coinPriceInToken, feeTransferGasLimit, baseGas, feeReceiver },
     nonce,
   };
 }
