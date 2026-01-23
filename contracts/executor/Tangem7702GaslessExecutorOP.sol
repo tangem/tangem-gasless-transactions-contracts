@@ -22,11 +22,14 @@ contract Tangem7702GaslessExecutorOP is
     // Conservative estimate: ~80 bytes for typical transaction
     uint256 private constant TX_OVERHEAD = 80;
 
+    // Entry point overhea: 32 bytes for extra "executor" parameter in the initial call data
+    uint256 private constant ENTRY_POINT_OVERHEAD = 32;
+
     /// @inheritdoc Tangem7702GaslessExecutor
     function _getL1Fee() internal view override returns (uint256) {
         // getL1FeeUpperBound expects: msg.data + other fields (NOT signature)
         // It adds 68 bytes internally for signature
-        uint256 unsignedTxSize = msg.data.length + TX_OVERHEAD;
+        uint256 unsignedTxSize = msg.data.length + TX_OVERHEAD + ENTRY_POINT_OVERHEAD;
 
         return OP_GAS_PRICE_ORACLE.getL1FeeUpperBound(unsignedTxSize);
     }
