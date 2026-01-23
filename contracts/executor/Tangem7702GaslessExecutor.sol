@@ -57,9 +57,9 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
     ) 
         external
     {
-        _verifyGaslessTransaction(gaslessTx, signature);
-
         uint256 startGas = gasleft();
+
+        _verifyGaslessTransaction(gaslessTx, signature);
 
         (bool success, bytes memory returnData) =
             gaslessTx.transaction.to.call{value: gaslessTx.transaction.value}(gaslessTx.transaction.data);
@@ -105,7 +105,7 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
     ///      using `fee.coinPriceInToken / PRICE_PRECISION`. Measures the gas spent by the
     ///      fee transfer itself and enforces `feeTransferGasLimit` depending on `forced`.
     /// @param fee Fee parameters used for computation and the token transfer.
-    /// @param startGas Gas snapshot taken before executing the target call.
+    /// @param startGas Gas snapshot taken at the start of `executeTransaction` funtion.
     /// @param forced If true, exceeding `feeTransferGasLimit` is reported via an event; otherwise it reverts.
     function _processFeeTransfer(
         Fee calldata fee,
