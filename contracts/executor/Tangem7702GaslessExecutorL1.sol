@@ -14,4 +14,9 @@ contract Tangem7702GaslessExecutorL1 is
     function _getL1Fee() internal pure override returns (uint256) {
         return 0;
     }
+
+    /// @inheritdoc Tangem7702GaslessExecutor
+    function _baseGasAfterCall() internal pure override returns (uint256) {
+        return 8000;
+    }
 }
