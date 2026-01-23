@@ -22,7 +22,7 @@ contract Tangem7702GaslessExecutorOP is
     // Conservative estimate: ~80 bytes for typical transaction
     uint256 private constant TX_OVERHEAD = 80;
 
-    // Entry point overhea: 32 bytes for extra "executor" parameter in the initial call data
+    // Entry point overhead: 32 bytes for extra "executor" parameter in the initial call data when called via entry point
     uint256 private constant ENTRY_POINT_OVERHEAD = 32;
 
     /// @inheritdoc Tangem7702GaslessExecutor
