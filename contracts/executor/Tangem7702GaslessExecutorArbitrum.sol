@@ -21,4 +21,9 @@ contract Tangem7702GaslessExecutorArbitrum is
     function _getL1Fee() internal view override returns (uint256) {
         return ARB_GAS_INFO.getCurrentTxL1GasFees();
     }
+
+    /// @inheritdoc Tangem7702GaslessExecutor
+    function _baseGasAfterCall() internal pure override returns (uint256) {
+        return 8000; // Precompile is very cheap (~200 gas)
+    }
 }

@@ -112,7 +112,7 @@ describe("Tangem7702GaslessExecutor", function () {
       executor.connect(relayer).executeTransaction(gaslessTx, signature, false)
     )
       .to.be.revertedWithCustomError(executor, "InsufficientFundsForFee")
-      .withArgs(await token.getAddress(), 0n, 15n); // got 15 experimentally
+      .withArgs(await token.getAddress(), 0n, 30n); // got 30 experimentally
   });
 
   it("Reverts with InvalidNonce when provided nonce does not match stored nonce", async function () {
@@ -398,7 +398,7 @@ describe("Tangem7702GaslessExecutor", function () {
       feeToken: await token.getAddress(),
       maxTokenFee,
       coinPriceInToken: 1_000_000_000_000_000_000n,
-      feeTransferGasLimit: 1_000_000n,
+      feeTransferGasLimit: 100_000n,
       baseGas: 0n,
       feeReceiver: feeReceiver.address,
       nonce: 0n,

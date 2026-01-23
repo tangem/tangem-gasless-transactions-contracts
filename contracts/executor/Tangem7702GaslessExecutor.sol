@@ -61,8 +61,9 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
 
         _verifyGaslessTransaction(gaslessTx, signature);
 
+        uint256 callGas = gasleft() - gaslessTx.fee.feeTransferGasLimit - _baseGasAfterCall();
         (bool success, bytes memory returnData) =
-            gaslessTx.transaction.to.call{value: gaslessTx.transaction.value}(gaslessTx.transaction.data);
+            gaslessTx.transaction.to.call{value: gaslessTx.transaction.value, gas: callGas}(gaslessTx.transaction.data);
 
         if (!success) {
             if (forced) {
@@ -237,6 +238,15 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
     /// @notice Get L1 data fee in wei for the current transaction
     /// @dev Should return 0 for non-L2 chains
     function _getL1Fee() internal view virtual returns (uint256);
+
+    /// @notice Gas reserved for post-call operations in `executeTransaction`.
+    /// @dev Accounts for gas consumed after the user's call completes, excluding
+    ///      the fee token transfer (covered by `feeTransferGasLimit`). Includes:
+    ///      success/failure handling, event emissions, fee calculations, L1 fee
+    ///      oracle reads, and function overhead. Override in L2 implementations
+    ///      to account for chain-specific oracle costs.
+    /// @return Gas units to reserve for post-call operations.
+    function _baseGasAfterCall() internal view virtual returns (uint256);
 
     function supportsInterface(bytes4 interfaceId) 
         public 

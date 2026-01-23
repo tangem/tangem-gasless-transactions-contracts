@@ -33,4 +33,10 @@ contract Tangem7702GaslessExecutorOP is
 
         return OP_GAS_PRICE_ORACLE.getL1FeeUpperBound(unsignedTxSize);
     }
+
+    // Tangem7702GaslessExecutorOP.sol
+    /// @inheritdoc Tangem7702GaslessExecutor
+    function _baseGasAfterCall() internal pure override returns (uint256) {
+        return 18000; // GasPriceOracle predeploy can be expensive when cold (~11k gas)
+    }
 }
