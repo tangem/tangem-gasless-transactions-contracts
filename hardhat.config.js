@@ -8,7 +8,12 @@ const ACCOUNTS = MNEMONIC ? { mnemonic: MNEMONIC, "initialIndex": 0 } : "remote"
 const deploy = task(
   "deploy",
   "Deploys all the contracts"
-).setAction(() => import("./tasks/deploy.js"))
+).addOption({
+    name: "type",
+    description: "The type of Exector to deploy, depending on the network type",
+    defaultValue: "",
+  })
+  .setAction(() => import("./tasks/deploy.js"))
   .build();
 
 export default {
