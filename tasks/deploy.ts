@@ -1,7 +1,7 @@
 import { HardhatRuntimeEnvironment } from "hardhat/types/hre";
 
 interface DeployTaskArguments {
-  // No argument in this case
+  type: string
 }
 
 export default async function (
@@ -10,7 +10,17 @@ export default async function (
 ) {
   const { ethers } = await hre.network.connect();
 
-  const Tangem7702GaslessExecutor = await ethers.getContractFactory("Tangem7702GaslessExecutor");
+  let Tangem7702GaslessExecutor;
+  if (taskArguments.type == "L1") {
+    Tangem7702GaslessExecutor = await ethers.getContractFactory("Tangem7702GaslessExecutorL1");
+  } else if (taskArguments.type == "OP") {
+    Tangem7702GaslessExecutor = await ethers.getContractFactory("Tangem7702GaslessExecutorOP");
+  } else if (taskArguments.type == "OP") {
+    Tangem7702GaslessExecutor = await ethers.getContractFactory("Tangem7702GaslessExecutorArbitrum");
+  } else {
+    throw "Unknown type"
+  }
+  
   const executor = await Tangem7702GaslessExecutor.deploy();
   await executor.waitForDeployment();
 
