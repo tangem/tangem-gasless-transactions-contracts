@@ -2,7 +2,7 @@ import hardhatToolboxMochaEthers from "@nomicfoundation/hardhat-toolbox-mocha-et
 import { task } from "hardhat/config";
 import "dotenv/config";
 
-const { MNEMONIC, ETHEREUM_RPC_URL, POLYGON_RPC_URL, API_KEY } = process.env;
+const { MNEMONIC, ETHEREUM_RPC_URL, POLYGON_RPC_URL, BSC_RPC_URL, ARBITRUM_RPC_URL, BASE_RPC_URL, API_KEY } = process.env;
 const ACCOUNTS = MNEMONIC ? { mnemonic: MNEMONIC, "initialIndex": 0 } : "remote";
 
 const deploy = task(
@@ -39,6 +39,27 @@ export default {
       type: "http",
       chainType: "l1",
       url: POLYGON_RPC_URL,
+      mnemonic: MNEMONIC,
+      accounts: ACCOUNTS
+    },
+    bsc: {
+      type: "http",
+      chainType: "l1",
+      url: BSC_RPC_URL,
+      mnemonic: MNEMONIC,
+      accounts: ACCOUNTS
+    },
+    arbitrum: {
+      type: "http",
+      chainType: "generic",
+      url: ARBITRUM_RPC_URL,
+      mnemonic: MNEMONIC,
+      accounts: ACCOUNTS
+    },
+    base: {
+      type: "http",
+      chainType: "op",
+      url: BASE_RPC_URL,
       mnemonic: MNEMONIC,
       accounts: ACCOUNTS
     },
