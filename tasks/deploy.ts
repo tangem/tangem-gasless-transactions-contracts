@@ -15,7 +15,7 @@ export default async function (
     Tangem7702GaslessExecutor = await ethers.getContractFactory("Tangem7702GaslessExecutorL1");
   } else if (taskArguments.type == "OP") {
     Tangem7702GaslessExecutor = await ethers.getContractFactory("Tangem7702GaslessExecutorOP");
-  } else if (taskArguments.type == "OP") {
+  } else if (taskArguments.type == "arbitrum") {
     Tangem7702GaslessExecutor = await ethers.getContractFactory("Tangem7702GaslessExecutorArbitrum");
   } else {
     throw "Unknown type"
