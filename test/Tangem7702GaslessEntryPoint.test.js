@@ -7,13 +7,24 @@ import { set7702Delegate } from "./helpers/eip7702.js";
 // simulated networks, and state changes (like setCode) won't be visible in the test.
 const conn = await hre.network.connect();
 
+const DEFAULT_CALL_GAS_LIMIT = 200_000n;
+
 // Build a minimal GaslessTransaction object that matches the EntryPoint ABI.
-// We intentionally keep fee fields mostly zeroed here because EntryPoint only forwards them.
-function makeGaslessTx({ to, value, data, feeToken, maxTokenFee, feeReceiver, nonce }) {
+// IMPORTANT: Transaction struct includes `gasLimit` in the onchain ABI.
+function makeGaslessTx({
+  to,
+  value,
+  gasLimit = DEFAULT_CALL_GAS_LIMIT,
+  data,
+  feeToken,
+  maxTokenFee,
+  feeReceiver,
+  nonce,
+}) {
   // Encode the nested struct exactly as Solidity expects: { transaction: {...}, fee: {...}, nonce }
   return {
     // Target call parameters that the executor will perform.
-    transaction: { to, value, data },
+    transaction: { to, value, gasLimit, data },
 
     // Fee parameters — EntryPoint doesn’t validate these, it only forwards them.
     fee: {
@@ -24,7 +35,7 @@ function makeGaslessTx({ to, value, data, feeToken, maxTokenFee, feeReceiver, no
       coinPriceInToken: 0n,
       feeTransferGasLimit: 0n,
       baseGas: 0n,
-      feeReceiver: feeReceiver
+      feeReceiver: feeReceiver,
     },
 
     // Nonce is part of the signed payload; EntryPoint doesn’t validate it, executor does.
@@ -141,8 +152,14 @@ describe("Tangem7702GaslessEntryPoint", function () {
 
   it("Reverts with InvalidDelegate when executor delegates to a different contract", async function () {
     // Pull clean state from fixture snapshot.
-    const { c, entryPoint, requiredDelegate, otherDelegate, executorEOA, feeReceiverEOA } =
-      await conn.networkHelpers.loadFixture(deployEntryPointFixture);
+    const {
+      c,
+      entryPoint,
+      requiredDelegate,
+      otherDelegate,
+      executorEOA,
+      feeReceiverEOA,
+    } = await conn.networkHelpers.loadFixture(deployEntryPointFixture);
 
     // Use ethers from the same connection.
     const { ethers } = c;
@@ -182,8 +199,14 @@ describe("Tangem7702GaslessEntryPoint", function () {
 
   it("Forwards executeTransaction to executor when delegation matches required delegate", async function () {
     // Load snapshot for a deterministic baseline.
-    const { c, entryPoint, requiredDelegate, executorEOA, feeReceiverEOA, randomCaller } =
-      await conn.networkHelpers.loadFixture(deployEntryPointFixture);
+    const {
+      c,
+      entryPoint,
+      requiredDelegate,
+      executorEOA,
+      feeReceiverEOA,
+      randomCaller,
+    } = await conn.networkHelpers.loadFixture(deployEntryPointFixture);
 
     // Use ethers from the same connection.
     const { ethers } = c;
@@ -203,6 +226,8 @@ describe("Tangem7702GaslessEntryPoint", function () {
       to: feeReceiverEOA.address,
       // value > 0 is allowed and intentionally tested.
       value: 123n,
+      // Explicit gasLimit just to be extra deterministic in tests.
+      gasLimit: 250_000n,
       data: txData,
       feeToken: ethers.ZeroAddress,
       maxTokenFee: 999n,
@@ -214,12 +239,7 @@ describe("Tangem7702GaslessEntryPoint", function () {
     // This ensures that inside delegated executor code, msg.sender is the EntryPoint (not the random caller).
     await entryPoint
       .connect(randomCaller)
-      .executeTransaction(
-        gaslessTx,
-        signature,
-        true,
-        executorEOA.address
-      );
+      .executeTransaction(gaslessTx, signature, true, executorEOA.address);
 
     // The executor is an EOA address, but it now has EIP-7702 delegation code installed.
     // We can attach the mock ABI to the EOA address and read the storage that the delegate code wrote.

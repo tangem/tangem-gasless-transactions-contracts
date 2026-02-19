@@ -9,6 +9,8 @@ interface ITangem7702GaslessExecutorMock {
         address to;
         /// @notice Amount of native coin (ETH) to send with the call.
         uint256 value;
+        /// @notice Gas forwarded to the target call.
+        uint256 gasLimit;
         /// @notice ABI-encoded calldata for the call.
         bytes data;
     }
@@ -26,7 +28,7 @@ interface ITangem7702GaslessExecutorMock {
         uint256 feeTransferGasLimit;
         /// @notice Fixed gas overhead added to the measured gas for fee calculation.
         uint256 baseGas;
-        /// @notice The recipient of the fee. Added to signature to discourage front-running
+        /// @notice The recipient of the fee. Added to signature to discourage front-running.
         address feeReceiver;
     }
 
