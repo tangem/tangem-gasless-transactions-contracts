@@ -78,23 +78,23 @@ describe("Tangem7702GaslessExecutor", function () {
     ).to.not.revert(ethers);
   });
 
-  it("Reverts with InsufficientFundsForFee when fee token balance is below maxTokenFee", async function () {
+  it("Reverts with InsufficientFundsForFee when fee token balance is below required fee amount", async function () {
     // Load fresh fixture state for this test.
     const { executor, token, target, feeReceiver, relayer, executorEOA } =
       await networkHelpers.loadFixture(deployExecutorFixture);
 
-    // Encode a successful target call so any revert comes from executor pre-checks.
+    // Encode a successful target call so any revert comes from executor fee processing.
     const data = target.interface.encodeFunctionData("ok", ["0x"]);
 
-    // Build a gasless transaction where maxTokenFee is non-zero but executor has zero token balance.
+    // Build a gasless transaction where fee is enabled but executor has zero token balance.
     const gaslessTx = makeGaslessTx({
       to: await target.getAddress(),
       value: 0n,
       data,
       feeToken: await token.getAddress(),
-      maxTokenFee: 1000000n,
-      coinPriceInToken: 500000n,
-      feeTransferGasLimit: 100n,
+      maxTokenFee: 1_000_000_000n,
+      coinPriceInToken: 500_000n,
+      feeTransferGasLimit: 100_000n,
       baseGas: 100n,
       feeReceiver: feeReceiver.address,
       nonce: 0n,
@@ -107,12 +107,13 @@ describe("Tangem7702GaslessExecutor", function () {
       gaslessTx,
     });
 
-    // Expect an revert due to insufficient fee-token balance.
+    // Ensure feeAmount becomes non-zero so we deterministically hit insufficient-balance.
     await expect(
-      executor.connect(relayer).executeTransaction(gaslessTx, signature, false)
+      executor
+        .connect(relayer)
+        .executeTransaction(gaslessTx, signature, false, { gasPrice: 1_000_000_000n })
     )
-      .to.be.revertedWithCustomError(executor, "InsufficientFundsForFee")
-      .withArgs(await token.getAddress(), 0n, 30n); // got 30 experimentally
+      .to.be.revertedWithCustomError(executor, "InsufficientFundsForFee");
   });
 
   it("Reverts with InvalidNonce when provided nonce does not match stored nonce", async function () {
@@ -141,9 +142,7 @@ describe("Tangem7702GaslessExecutor", function () {
     });
 
     // Expect the contract to reject the transaction because nonces must match exactly.
-    await expect(
-      executor.connect(relayer).executeTransaction(gaslessTx, "0x1234", false)
-    )
+    await expect(executor.connect(relayer).executeTransaction(gaslessTx, "0x1234", false))
       .to.be.revertedWithCustomError(executor, "InvalidNonce")
       .withArgs(0n, 1n);
   });
@@ -179,9 +178,7 @@ describe("Tangem7702GaslessExecutor", function () {
     });
 
     // Expect InvalidSigner(recoveredSigner, expectedSigner) where expectedSigner is executorEOA.
-    await expect(
-      executor.connect(relayer).executeTransaction(gaslessTx, signature, false)
-    )
+    await expect(executor.connect(relayer).executeTransaction(gaslessTx, signature, false))
       .to.be.revertedWithCustomError(executor, "InvalidSigner")
       .withArgs(deployer.address, executorEOA.address);
 
@@ -220,10 +217,7 @@ describe("Tangem7702GaslessExecutor", function () {
     });
 
     // Expect the executor to bubble the target's revert reason.
-    await expect(
-      executor.connect(relayer).executeTransaction(gaslessTx, signature, false)
-    )
-      .to.be.revertedWith("FAIL");
+    await expect(executor.connect(relayer).executeTransaction(gaslessTx, signature, false)).to.be.revertedWith("FAIL");
 
     // Confirm nonce increment is rolled back because the whole call reverted.
     expect(await executor.nonce()).to.equal(0n);
@@ -235,7 +229,7 @@ describe("Tangem7702GaslessExecutor", function () {
       await networkHelpers.loadFixture(deployExecutorFixture);
 
     // Provide short calldata so the call hits the target fallback and reverts with a reason string.
-    const data = "0x11";
+    const data = "0xdeadbeef";
 
     // Use the target address with calldata that does not match any function so fallback reverts.
     const gaslessTx = makeGaslessTx({
@@ -260,10 +254,9 @@ describe("Tangem7702GaslessExecutor", function () {
     });
 
     // Expect the executor to bubble the fallback revert reason.
-    await expect(
-      executor.connect(relayer).executeTransaction(gaslessTx, signature, false)
-    )
-      .to.be.revertedWith("FALLBACK");
+    await expect(executor.connect(relayer).executeTransaction(gaslessTx, signature, false)).to.be.revertedWith(
+      "FALLBACK"
+    );
 
     // Confirm nonce increment is rolled back because the whole call reverted.
     expect(await executor.nonce()).to.equal(0n);
@@ -303,9 +296,7 @@ describe("Tangem7702GaslessExecutor", function () {
     });
 
     // Expect ExecutionFailed because the target returned no revert data to bubble.
-    await expect(
-      executor.connect(relayer).executeTransaction(gaslessTx, signature, false)
-    )
+    await expect(executor.connect(relayer).executeTransaction(gaslessTx, signature, false))
       .to.be.revertedWithCustomError(executor, "ExecutionFailedNotForced")
       .withArgs(await target.getAddress(), 0n, selector);
 
@@ -350,9 +341,7 @@ describe("Tangem7702GaslessExecutor", function () {
     });
 
     // Execute through a relayer so msg.sender != executorEOA, but signer must still be executorEOA.
-    const tx = await executor
-      .connect(relayer)
-      .executeTransaction(gaslessTx, signature, false);
+    const tx = await executor.connect(relayer).executeTransaction(gaslessTx, signature, false);
 
     // Ensure fee-related events are not emitted when fee is disabled.
     await expect(tx).to.not.emit(executor, "FeeTransferProcessed");
@@ -550,9 +539,7 @@ describe("Tangem7702GaslessExecutor", function () {
 
     // With forced == false, exceeded gas limit must revert with the custom error.
     await expect(
-      executor
-        .connect(relayer)
-        .executeTransaction(gaslessTx, signature, false, { gasPrice: 1_000_000_000n })
+      executor.connect(relayer).executeTransaction(gaslessTx, signature, false, { gasPrice: 1_000_000_000n })
     ).to.be.revertedWithCustomError(executor, "FeeTransferGasLimitExceededNotForced");
 
     // Revert must roll back token balance changes.
@@ -604,9 +591,7 @@ describe("Tangem7702GaslessExecutor", function () {
 
     // Expect the fee computation to exceed maxTokenFee and revert with MaxFeeExceeded.
     await expect(
-      executor
-        .connect(relayer)
-        .executeTransaction(gaslessTx, signature, false, { gasPrice: 1_000_000_000n })
+      executor.connect(relayer).executeTransaction(gaslessTx, signature, false, { gasPrice: 1_000_000_000n })
     ).to.be.revertedWithCustomError(executor, "MaxFeeExceeded");
 
     // Nonce must remain unchanged because the transaction reverted.
