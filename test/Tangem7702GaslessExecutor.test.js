@@ -1,6 +1,6 @@
 import { expect } from "chai";
 import hre from "hardhat";
-import { makeGaslessTx, signGaslessTx } from "./helpers/eip712Gasless.js";
+import { makeGaslessTx, makeGaslessBatchTx, signGaslessTx, signGaslessBatchTx } from "./helpers/eip712Gasless.js";
 
 const conn = await hre.network.connect();
 const { ethers, networkHelpers } = conn;
@@ -596,5 +596,976 @@ describe("Tangem7702GaslessExecutor", function () {
 
     // Nonce must remain unchanged because the transaction reverted.
     expect(await executor.nonce()).to.equal(0n);
+  });
+
+  it("Reverts with ZeroTarget when single transaction target is zero", async function () {
+    // Load fresh fixture state for this test.
+    const { executor, token, feeReceiver, relayer } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    // Build a single payload with a zero target to hit pre-validation before signature verification.
+    const gaslessTx = makeGaslessTx({
+      to: ethers.ZeroAddress,
+      value: 0n,
+      gasLimit: 200_000n,
+      data: "0x",
+      feeToken: await token.getAddress(),
+      maxTokenFee: 0n,
+      coinPriceInToken: 0n,
+      feeTransferGasLimit: 0n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    // Zero target validation runs before signature verification.
+    await expect(executor.connect(relayer).executeTransaction(gaslessTx, "0x", false))
+      .to.be.revertedWithCustomError(executor, "ZeroTarget");
+  });
+
+  it("Reverts with DataTooShort when single transaction calldata is non-empty and shorter than 4 bytes", async function () {
+    // Load fresh fixture state for this test.
+    const { executor, token, target, feeReceiver, relayer } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    // Build a single payload with short calldata to hit selector-length validation before signature verification.
+    const gaslessTx = makeGaslessTx({
+      to: await target.getAddress(),
+      value: 0n,
+      gasLimit: 200_000n,
+      data: "0x11",
+      feeToken: await token.getAddress(),
+      maxTokenFee: 0n,
+      coinPriceInToken: 0n,
+      feeTransferGasLimit: 0n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    // Calldata shape validation runs before signature verification.
+    await expect(executor.connect(relayer).executeTransaction(gaslessTx, "0x", false))
+      .to.be.revertedWithCustomError(executor, "DataTooShort");
+  });
+
+  it("Reverts with InvalidCallsLength when batch contains fewer than 2 calls", async function () {
+    // Load fresh fixture state for this test.
+    const { executor, token, target, feeReceiver, relayer } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    // Build a batch with exactly one call to trigger the lower bound check.
+    const gaslessBatchTx = makeGaslessBatchTx({
+      transactions: [
+        {
+          to: await target.getAddress(),
+          value: 0n,
+          gasLimit: 200_000n,
+          data: target.interface.encodeFunctionData("ok", ["0x01"]),
+        },
+      ],
+      feeToken: await token.getAddress(),
+      maxTokenFee: 0n,
+      coinPriceInToken: 0n,
+      feeTransferGasLimit: 0n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    // Batch length validation runs before signature verification.
+    await expect(executor.connect(relayer).executeBatchTransaction(gaslessBatchTx, "0x", false))
+      .to.be.revertedWithCustomError(executor, "InvalidCallsLength");
+  });
+
+  it("Reverts with InvalidCallsLength when batch contains more than max allowed calls", async function () {
+    // Load fresh fixture state for this test.
+    const { executor, token, target, feeReceiver, relayer } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    // Prepare six calls to exceed MAX_BATCH_CALLS == 5.
+    const callData = target.interface.encodeFunctionData("ok", ["0x02"]);
+
+    // Build an oversized batch to trigger the upper bound check.
+    const gaslessBatchTx = makeGaslessBatchTx({
+      transactions: [
+        { to: await target.getAddress(), value: 0n, gasLimit: 200_000n, data: callData },
+        { to: await target.getAddress(), value: 0n, gasLimit: 200_000n, data: callData },
+        { to: await target.getAddress(), value: 0n, gasLimit: 200_000n, data: callData },
+        { to: await target.getAddress(), value: 0n, gasLimit: 200_000n, data: callData },
+        { to: await target.getAddress(), value: 0n, gasLimit: 200_000n, data: callData },
+        { to: await target.getAddress(), value: 0n, gasLimit: 200_000n, data: callData },
+      ],
+      feeToken: await token.getAddress(),
+      maxTokenFee: 0n,
+      coinPriceInToken: 0n,
+      feeTransferGasLimit: 0n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    // Batch length validation runs before signature verification.
+    await expect(executor.connect(relayer).executeBatchTransaction(gaslessBatchTx, "0x", false))
+      .to.be.revertedWithCustomError(executor, "InvalidCallsLength");
+  });
+
+  it("Reverts with ZeroTarget when batch contains a zero target", async function () {
+    // Load fresh fixture state for this test.
+    const { executor, token, target, feeReceiver, relayer } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    // Prepare one valid call and one invalid call with zero target.
+    const callData = target.interface.encodeFunctionData("ok", ["0x03"]);
+
+    // Build a batch that fails during pre-validation before signature verification.
+    const gaslessBatchTx = makeGaslessBatchTx({
+      transactions: [
+        { to: await target.getAddress(), value: 0n, gasLimit: 200_000n, data: callData },
+        { to: ethers.ZeroAddress, value: 0n, gasLimit: 200_000n, data: callData },
+      ],
+      feeToken: await token.getAddress(),
+      maxTokenFee: 0n,
+      coinPriceInToken: 0n,
+      feeTransferGasLimit: 0n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    // Zero target validation runs before signature verification.
+    await expect(executor.connect(relayer).executeBatchTransaction(gaslessBatchTx, "0x", false))
+      .to.be.revertedWithCustomError(executor, "ZeroTarget");
+  });
+
+  it("Reverts with DataTooShort when batch contains non-empty calldata shorter than 4 bytes", async function () {
+    // Load fresh fixture state for this test.
+    const { executor, token, target, feeReceiver, relayer } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    // Build a batch with short calldata in the second call to trigger selector-length validation.
+    const gaslessBatchTx = makeGaslessBatchTx({
+      transactions: [
+        {
+          to: await target.getAddress(),
+          value: 0n,
+          gasLimit: 200_000n,
+          data: target.interface.encodeFunctionData("ok", ["0x04"]),
+        },
+        {
+          to: await target.getAddress(),
+          value: 0n,
+          gasLimit: 200_000n,
+          data: "0x11",
+        },
+      ],
+      feeToken: await token.getAddress(),
+      maxTokenFee: 0n,
+      coinPriceInToken: 0n,
+      feeTransferGasLimit: 0n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    // Calldata shape validation runs before signature verification.
+    await expect(executor.connect(relayer).executeBatchTransaction(gaslessBatchTx, "0x", false))
+      .to.be.revertedWithCustomError(executor, "DataTooShort");
+  });
+
+  it("Reverts with InvalidSigner when batch signature does not recover to executor address", async function () {
+    // Load fresh fixture state for this test.
+    const { executor, token, target, feeReceiver, relayer, deployer, executorEOA } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    // Build a valid two-call batch so the failure happens specifically in batch signature verification.
+    const gaslessBatchTx = makeGaslessBatchTx({
+      transactions: [
+        {
+          to: await target.getAddress(),
+          value: 0n,
+          gasLimit: 200_000n,
+          data: target.interface.encodeFunctionData("ok", ["0x05"]),
+        },
+        {
+          to: await target.getAddress(),
+          value: 0n,
+          gasLimit: 200_000n,
+          data: target.interface.encodeFunctionData("ok", ["0x06"]),
+        },
+      ],
+      feeToken: await token.getAddress(),
+      maxTokenFee: 0n,
+      coinPriceInToken: 0n,
+      feeTransferGasLimit: 0n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    // Sign with the wrong signer so recovered address mismatches address(this) in delegated context.
+    const { signature } = await signGaslessBatchTx({
+      conn,
+      executorSigner: deployer,
+      executorAddress: executorEOA.address,
+      gaslessBatchTx,
+    });
+
+    // Batch signature verification must reject the wrong signer.
+    await expect(executor.connect(relayer).executeBatchTransaction(gaslessBatchTx, signature, false))
+      .to.be.revertedWithCustomError(executor, "InvalidSigner")
+      .withArgs(deployer.address, executorEOA.address);
+
+    // Nonce must remain unchanged because the transaction reverted.
+    expect(await executor.nonce()).to.equal(0n);
+  });
+
+  it("Bubbles revert reason when a batch call reverts with string reason and forced is false", async function () {
+    // Load fresh fixture state for this test.
+    const { executor, token, target, feeReceiver, relayer, executorEOA } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    // Build a batch where the second call reverts with a string reason.
+    const gaslessBatchTx = makeGaslessBatchTx({
+      transactions: [
+        {
+          to: await target.getAddress(),
+          value: 0n,
+          gasLimit: 200_000n,
+          data: target.interface.encodeFunctionData("ok", ["0xCC"]),
+        },
+        {
+          to: await target.getAddress(),
+          value: 0n,
+          gasLimit: 200_000n,
+          data: target.interface.encodeFunctionData("fail", []),
+        },
+      ],
+      feeToken: await token.getAddress(),
+      maxTokenFee: 0n,
+      coinPriceInToken: 0n,
+      feeTransferGasLimit: 0n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    // Produce a valid batch signature from executorEOA.
+    const { signature } = await signGaslessBatchTx({
+      conn,
+      executorSigner: await ethers.getSigner(executorEOA.address),
+      executorAddress: executorEOA.address,
+      gaslessBatchTx,
+    });
+
+    // Executor must bubble the target revert reason in non-forced mode.
+    await expect(executor.connect(relayer).executeBatchTransaction(gaslessBatchTx, signature, false))
+      .to.be.revertedWith("FAIL");
+
+    // Revert must roll back the first successful call side effects.
+    expect(await target.calls()).to.equal(0n);
+
+    // Revert must roll back the nonce increment as well.
+    expect(await executor.nonce()).to.equal(0n);
+  });
+
+  it("Reverts with BatchExecutionFailedNotForced when a batch call reverts with empty data and forced is false", async function () {
+    // Load fresh fixture state for this test.
+    const { executor, token, target, feeReceiver, relayer, executorEOA } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    // Pre-compute selector expected in the batch empty-revert custom error.
+    const selector = target.interface.getFunction("failNoData").selector;
+
+    // Build a batch where the second call reverts with empty returndata.
+    const gaslessBatchTx = makeGaslessBatchTx({
+      transactions: [
+        {
+          to: await target.getAddress(),
+          value: 0n,
+          gasLimit: 200_000n,
+          data: target.interface.encodeFunctionData("ok", ["0xDD"]),
+        },
+        {
+          to: await target.getAddress(),
+          value: 0n,
+          gasLimit: 200_000n,
+          data: target.interface.encodeFunctionData("failNoData", []),
+        },
+      ],
+      feeToken: await token.getAddress(),
+      maxTokenFee: 0n,
+      coinPriceInToken: 0n,
+      feeTransferGasLimit: 0n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    // Produce a valid batch signature from executorEOA.
+    const { signature } = await signGaslessBatchTx({
+      conn,
+      executorSigner: await ethers.getSigner(executorEOA.address),
+      executorAddress: executorEOA.address,
+      gaslessBatchTx,
+    });
+
+    // Executor must use BatchExecutionFailedNotForced because there is no revert data to bubble.
+    await expect(executor.connect(relayer).executeBatchTransaction(gaslessBatchTx, signature, false))
+      .to.be.revertedWithCustomError(executor, "BatchExecutionFailedNotForced")
+      .withArgs(1n, await target.getAddress(), 0n, selector);
+
+    // Revert must roll back prior successful call effects.
+    expect(await target.calls()).to.equal(0n);
+
+    // Revert must roll back the nonce increment.
+    expect(await executor.nonce()).to.equal(0n);
+  });
+
+  it("Reverts with InsufficientGas when batch total requested gas exceeds available gas reserve", async function () {
+    // Load fresh fixture state for this test.
+    const { executor, token, target, feeReceiver, relayer, executorEOA } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    // Build a batch with absurdly high gas limits so the executor fails its reserve check before calls.
+    const gaslessBatchTx = makeGaslessBatchTx({
+      transactions: [
+        {
+          to: await target.getAddress(),
+          value: 0n,
+          gasLimit: 100_000_000n,
+          data: target.interface.encodeFunctionData("ok", ["0x1212"]),
+        },
+        {
+          to: await target.getAddress(),
+          value: 0n,
+          gasLimit: 100_000_000n,
+          data: target.interface.encodeFunctionData("ok", ["0x3434"]),
+        },
+      ],
+      feeToken: await token.getAddress(),
+      maxTokenFee: 0n,
+      coinPriceInToken: 0n,
+      feeTransferGasLimit: 0n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    // Produce a valid signature so the failure happens specifically in gas reserve checks.
+    const { signature } = await signGaslessBatchTx({
+      conn,
+      executorSigner: await ethers.getSigner(executorEOA.address),
+      executorAddress: executorEOA.address,
+      gaslessBatchTx,
+    });
+
+    // Executor must reject the batch before executing any target calls.
+    await expect(executor.connect(relayer).executeBatchTransaction(gaslessBatchTx, signature, false))
+      .to.be.revertedWithCustomError(executor, "InsufficientGas");
+
+    // Nonce must remain unchanged because the transaction reverted.
+    expect(await executor.nonce()).to.equal(0n);
+
+    // No target calls must execute when the reserve check fails.
+    expect(await target.calls()).to.equal(0n);
+  });
+
+  it("Executes a valid batch and emits BatchTransactionExecuted when fee is disabled", async function () {
+    // Load fresh fixture state for this test.
+    const { executor, token, target, feeReceiver, relayer, executorEOA } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    // Build a valid batch with two successful calls.
+    const gaslessBatchTx = makeGaslessBatchTx({
+      transactions: [
+        {
+          to: await target.getAddress(),
+          value: 0n,
+          gasLimit: 200_000n,
+          data: target.interface.encodeFunctionData("ok", ["0xAA"]),
+        },
+        {
+          to: await target.getAddress(),
+          value: 0n,
+          gasLimit: 200_000n,
+          data: target.interface.encodeFunctionData("ok", ["0xBB"]),
+        },
+      ],
+      feeToken: await token.getAddress(),
+      maxTokenFee: 0n,
+      coinPriceInToken: 0n,
+      feeTransferGasLimit: 0n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    // Produce a valid batch signature from executorEOA.
+    const { signature } = await signGaslessBatchTx({
+      conn,
+      executorSigner: await ethers.getSigner(executorEOA.address),
+      executorAddress: executorEOA.address,
+      gaslessBatchTx,
+    });
+
+    // Execute the batch with fee disabled.
+    // Set explicit outer gas limit to avoid Hardhat auto-estimation overshooting provider cap.
+    const tx = await executor.connect(relayer).executeBatchTransaction(
+      gaslessBatchTx,
+      signature,
+      false,
+      { gasLimit: 5_000_000n }
+    );
+
+    // Fee processing must be skipped when coinPriceInToken == 0.
+    await expect(tx).to.not.emit(executor, "FeeTransferProcessed");
+    await expect(tx).to.not.emit(executor, "FeeTransferGasLimitExceeded");
+
+    // Batch completion event must report total and executed calls.
+    await expect(tx)
+      .to.emit(executor, "BatchTransactionExecuted")
+      .withArgs(executorEOA.address, 0n, 2n, 2n);
+
+    // Target must execute both calls.
+    expect(await target.calls()).to.equal(2n);
+
+    // Nonce must increment exactly once for a successful batch.
+    expect(await executor.nonce()).to.equal(1n);
+  });
+
+  it("Emits BatchCallFailed and stops remaining calls when forced is true", async function () {
+    // Load fresh fixture state for this test.
+    const { executor, token, target, feeReceiver, relayer, executorEOA } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    // Pre-compute selector expected in BatchCallFailed.
+    const failSelector = target.interface.getFunction("fail").selector;
+
+    // Build a batch where the second call fails and the third call should not run.
+    const gaslessBatchTx = makeGaslessBatchTx({
+      transactions: [
+        {
+          to: await target.getAddress(),
+          value: 0n,
+          gasLimit: 200_000n,
+          data: target.interface.encodeFunctionData("ok", ["0xEE"]),
+        },
+        {
+          to: await target.getAddress(),
+          value: 0n,
+          gasLimit: 200_000n,
+          data: target.interface.encodeFunctionData("fail", []),
+        },
+        {
+          to: await target.getAddress(),
+          value: 0n,
+          gasLimit: 200_000n,
+          data: target.interface.encodeFunctionData("ok", ["0xFF"]),
+        },
+      ],
+      feeToken: await token.getAddress(),
+      maxTokenFee: 0n,
+      coinPriceInToken: 0n,
+      feeTransferGasLimit: 0n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    // Produce a valid batch signature from executorEOA.
+    const { signature } = await signGaslessBatchTx({
+      conn,
+      executorSigner: await ethers.getSigner(executorEOA.address),
+      executorAddress: executorEOA.address,
+      gaslessBatchTx,
+    });
+
+    // Execute in forced mode so the batch stops at first failure instead of reverting.
+    // Set explicit outer gas limit to avoid Hardhat auto-estimation overshooting provider cap.
+    const tx = await executor.connect(relayer).executeBatchTransaction(
+      gaslessBatchTx,
+      signature,
+      true,
+      { gasLimit: 5_000_000n }
+    );
+
+    // Executor must report the failed call index and selector.
+    await expect(tx)
+      .to.emit(executor, "BatchCallFailed")
+      .withArgs(1n, await target.getAddress(), 0n, failSelector);
+
+    // Batch completion event must report that only one call succeeded.
+    await expect(tx)
+      .to.emit(executor, "BatchTransactionExecuted")
+      .withArgs(executorEOA.address, 0n, 3n, 1n);
+
+    // Only the first successful call must have executed.
+    expect(await target.calls()).to.equal(1n);
+
+    // Nonce must increment because the forced batch completes successfully.
+    expect(await executor.nonce()).to.equal(1n);
+  });
+
+  it("Processes fee transfer after an early forced batch stop", async function () {
+    // Load fresh fixture state for this test.
+    const { executor, token, target, feeReceiver, relayer, deployer, executorEOA } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    // Mint enough fee token to cover the computed fee.
+    const maxTokenFee = 1_000_000_000_000_000_000n;
+    await token.connect(deployer).mint(executorEOA.address, maxTokenFee);
+
+    // Pre-compute selector expected in BatchCallFailed.
+    const failSelector = target.interface.getFunction("fail").selector;
+
+    // Build a batch where the second call fails, but forced mode should continue to fee processing.
+    const gaslessBatchTx = makeGaslessBatchTx({
+      transactions: [
+        {
+          to: await target.getAddress(),
+          value: 0n,
+          gasLimit: 200_000n,
+          data: target.interface.encodeFunctionData("ok", ["0x1111"]),
+        },
+        {
+          to: await target.getAddress(),
+          value: 0n,
+          gasLimit: 200_000n,
+          data: target.interface.encodeFunctionData("fail", []),
+        },
+      ],
+      feeToken: await token.getAddress(),
+      maxTokenFee,
+      coinPriceInToken: 1_000_000_000_000_000_000n,
+      feeTransferGasLimit: 100_000n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    // Produce a valid batch signature from executorEOA.
+    const { signature } = await signGaslessBatchTx({
+      conn,
+      executorSigner: await ethers.getSigner(executorEOA.address),
+      executorAddress: executorEOA.address,
+      gaslessBatchTx,
+    });
+
+    // Snapshot token balances to verify the fee transfer happens after the early stop.
+    const executorBalBefore = await token.balanceOf(executorEOA.address);
+    const receiverBalBefore = await token.balanceOf(feeReceiver.address);
+
+    // Execute in forced mode with non-zero gas price so feeAmount becomes non-zero.
+    // Set explicit outer gas limit to avoid Hardhat auto-estimation overshooting provider cap.
+    const tx = await executor.connect(relayer).executeBatchTransaction(
+      gaslessBatchTx,
+      signature,
+      true,
+      { gasPrice: 1_000_000_000n, gasLimit: 5_000_000n }
+    );
+
+    // Executor must report the failed batch call.
+    await expect(tx)
+      .to.emit(executor, "BatchCallFailed")
+      .withArgs(1n, await target.getAddress(), 0n, failSelector);
+
+    // Fee processing must still happen after the early stop.
+    await expect(tx).to.emit(executor, "FeeTransferProcessed");
+
+    // Batch completion event must report one successful call out of two.
+    await expect(tx)
+      .to.emit(executor, "BatchTransactionExecuted")
+      .withArgs(executorEOA.address, 0n, 2n, 1n);
+
+    // Parse the receipt to extract the actual fee amount.
+    const receipt = await tx.wait();
+    const feeLog = receipt.logs
+      .map((l) => {
+        try {
+          return executor.interface.parseLog(l);
+        } catch {
+          return null;
+        }
+      })
+      .find((p) => p && p.name === "FeeTransferProcessed");
+
+    // FeeTransferProcessed must be present in the receipt.
+    expect(feeLog).to.not.equal(undefined);
+
+    // Read the exact transferred fee amount from the event.
+    const feeAmount = feeLog.args.feeAmount;
+
+    // Snapshot balances after execution to compare deltas.
+    const executorBalAfter = await token.balanceOf(executorEOA.address);
+    const receiverBalAfter = await token.balanceOf(feeReceiver.address);
+
+    // Fee receiver must gain exactly the transferred fee amount.
+    expect(receiverBalAfter - receiverBalBefore).to.equal(feeAmount);
+
+    // Executor must lose exactly the transferred fee amount.
+    expect(executorBalBefore - executorBalAfter).to.equal(feeAmount);
+
+    // Only the first successful call must have executed before the failure stop.
+    expect(await target.calls()).to.equal(1n);
+
+    // Nonce must increment because the forced batch completed.
+    expect(await executor.nonce()).to.equal(1n);
+  });
+
+  it("Accepts ETH via payable fallback", async function () {
+    // Load fresh fixture state for this test.
+    const { relayer, executor } = await networkHelpers.loadFixture(deployExecutorFixture);
+
+    // Send ETH with non-empty calldata so the executor fallback() path is used.
+    await expect(
+      relayer.sendTransaction({
+        to: await executor.getAddress(),
+        value: 1n,
+        data: "0x1234",
+      })
+    ).to.not.revert(ethers);
+  });
+
+  it("Emits ExecutionFailed and completes when single call reverts and forced is true", async function () {
+    // Load fresh fixture state for this test.
+    const { executor, token, target, feeReceiver, relayer, executorEOA } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    // Encode a target call that always reverts with a string reason.
+    const data = target.interface.encodeFunctionData("fail", []);
+
+    // Pre-compute selector expected in events.
+    const selector = target.interface.getFunction("fail").selector;
+
+    // Build a single gasless transaction with fee disabled so we isolate forced failure handling.
+    const gaslessTx = makeGaslessTx({
+      to: await target.getAddress(),
+      value: 0n,
+      gasLimit: 250_000n,
+      data,
+      feeToken: await token.getAddress(),
+      maxTokenFee: 0n,
+      coinPriceInToken: 0n,
+      feeTransferGasLimit: 0n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    // Produce a valid signature from executorEOA so execution reaches the target call.
+    const { signature } = await signGaslessTx({
+      conn,
+      executorSigner: await ethers.getSigner(executorEOA.address),
+      executorAddress: executorEOA.address,
+      gaslessTx,
+    });
+
+    // Execute in forced mode so revert is converted into an event and the tx completes.
+    // Set explicit outer gas limit to avoid Hardhat auto-estimation overshooting provider cap.
+    const tx = await executor
+      .connect(relayer)
+      .executeTransaction(gaslessTx, signature, true, { gasLimit: 5_000_000n });
+
+    // Executor must report the failed user call.
+    await expect(tx)
+      .to.emit(executor, "ExecutionFailed")
+      .withArgs(await target.getAddress(), 0n, selector);
+
+    // Executor must still emit TransactionExecuted because forced mode completes successfully.
+    await expect(tx)
+      .to.emit(executor, "TransactionExecuted")
+      .withArgs(executorEOA.address, 0n, await target.getAddress(), 0n, selector);
+
+    // No fee events must be emitted when fee is disabled.
+    await expect(tx).to.not.emit(executor, "FeeTransferProcessed");
+    await expect(tx).to.not.emit(executor, "FeeTransferGasLimitExceeded");
+
+    // Target success path must not execute.
+    expect(await target.calls()).to.equal(0n);
+
+    // Nonce must increment because the forced transaction completes.
+    expect(await executor.nonce()).to.equal(1n);
+  });
+
+  it("Emits TransactionExecuted with zero selector when calldata is empty", async function () {
+    // Load fresh fixture state for this test.
+    const { executor, token, feeReceiver, relayer, executorEOA, deployer } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    // Empty calldata is valid and should produce selector == bytes4(0) in events.
+    const gaslessTx = makeGaslessTx({
+      to: deployer.address,
+      value: 0n,
+      gasLimit: 100_000n,
+      data: "0x",
+      feeToken: await token.getAddress(),
+      maxTokenFee: 0n,
+      coinPriceInToken: 0n,
+      feeTransferGasLimit: 0n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    // Produce a valid signature from executorEOA.
+    const { signature } = await signGaslessTx({
+      conn,
+      executorSigner: await ethers.getSigner(executorEOA.address),
+      executorAddress: executorEOA.address,
+      gaslessTx,
+    });
+
+    // Execute a call to an EOA; it should succeed and emit selector == 0x00000000.
+    const tx = await executor.connect(relayer).executeTransaction(gaslessTx, signature, false);
+
+    await expect(tx)
+      .to.emit(executor, "TransactionExecuted")
+      .withArgs(executorEOA.address, 0n, deployer.address, 0n, "0x00000000");
+
+    // Nonce must increment on success.
+    expect(await executor.nonce()).to.equal(1n);
+  });
+
+  it("Reverts with InvalidNonce when batch nonce does not match stored nonce", async function () {
+    // Load fresh fixture state for this test.
+    const { executor, token, target, feeReceiver, relayer } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    // Build a valid-shaped batch with nonce == 1 while stored nonce starts at 0.
+    const gaslessBatchTx = makeGaslessBatchTx({
+      transactions: [
+        {
+          to: await target.getAddress(),
+          value: 0n,
+          gasLimit: 200_000n,
+          data: target.interface.encodeFunctionData("ok", ["0x01"]),
+        },
+        {
+          to: await target.getAddress(),
+          value: 0n,
+          gasLimit: 200_000n,
+          data: target.interface.encodeFunctionData("ok", ["0x02"]),
+        },
+      ],
+      feeToken: await token.getAddress(),
+      maxTokenFee: 0n,
+      coinPriceInToken: 0n,
+      feeTransferGasLimit: 0n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 1n,
+    });
+
+    // Nonce validation runs before signature recovery/hashing side effects matter.
+    await expect(executor.connect(relayer).executeBatchTransaction(gaslessBatchTx, "0x", false))
+      .to.be.revertedWithCustomError(executor, "InvalidNonce")
+      .withArgs(0n, 1n);
+
+    // Nonce must remain unchanged after the reverted batch.
+    expect(await executor.nonce()).to.equal(0n);
+  });
+
+  it("Reverts with InsufficientGas when single transaction requested gas exceeds available reserve", async function () {
+    // Load fresh fixture state for this test.
+    const { executor, token, target, feeReceiver, relayer, executorEOA } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    // Build a single call with an absurdly high requested gas limit so reserve checks fail before the call.
+    const gaslessTx = makeGaslessTx({
+      to: await target.getAddress(),
+      value: 0n,
+      gasLimit: 100_000_000n,
+      data: target.interface.encodeFunctionData("ok", ["0x1234"]),
+      feeToken: await token.getAddress(),
+      maxTokenFee: 0n,
+      coinPriceInToken: 0n,
+      feeTransferGasLimit: 0n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    // Produce a valid signature so the failure happens specifically in gas reserve checks.
+    const { signature } = await signGaslessTx({
+      conn,
+      executorSigner: await ethers.getSigner(executorEOA.address),
+      executorAddress: executorEOA.address,
+      gaslessTx,
+    });
+
+    // Use an explicit outer gas limit to avoid Hardhat auto-estimation overshooting provider caps.
+    await expect(
+      executor.connect(relayer).executeTransaction(gaslessTx, signature, false, { gasLimit: 5_000_000n })
+    ).to.be.revertedWithCustomError(executor, "InsufficientGas");
+
+    // Revert must roll back nonce increment from signature verification.
+    expect(await executor.nonce()).to.equal(0n);
+
+    // No target calls must execute when reserve checks fail.
+    expect(await target.calls()).to.equal(0n);
+  });
+
+  it("Executes a valid batch with max allowed calls when fee is disabled", async function () {
+    // Load fresh fixture state for this test.
+    const { executor, token, target, feeReceiver, relayer, executorEOA } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    // Build a batch with exactly MAX_BATCH_CALLS == 5 successful calls.
+    const callData = target.interface.encodeFunctionData("ok", ["0xAB"]);
+    const gaslessBatchTx = makeGaslessBatchTx({
+      transactions: [
+        { to: await target.getAddress(), value: 0n, gasLimit: 200_000n, data: callData },
+        { to: await target.getAddress(), value: 0n, gasLimit: 200_000n, data: callData },
+        { to: await target.getAddress(), value: 0n, gasLimit: 200_000n, data: callData },
+        { to: await target.getAddress(), value: 0n, gasLimit: 200_000n, data: callData },
+        { to: await target.getAddress(), value: 0n, gasLimit: 200_000n, data: callData },
+      ],
+      feeToken: await token.getAddress(),
+      maxTokenFee: 0n,
+      coinPriceInToken: 0n,
+      feeTransferGasLimit: 0n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    // Produce a valid batch signature from executorEOA.
+    const { signature } = await signGaslessBatchTx({
+      conn,
+      executorSigner: await ethers.getSigner(executorEOA.address),
+      executorAddress: executorEOA.address,
+      gaslessBatchTx,
+    });
+
+    // Execute with an explicit outer gas limit to avoid Hardhat estimate overshooting provider cap.
+    const tx = await executor.connect(relayer).executeBatchTransaction(
+      gaslessBatchTx,
+      signature,
+      false,
+      { gasLimit: 7_000_000n }
+    );
+
+    // Batch completion event must report all five calls executed.
+    await expect(tx)
+      .to.emit(executor, "BatchTransactionExecuted")
+      .withArgs(executorEOA.address, 0n, 5n, 5n);
+
+    // Fee processing must remain disabled.
+    await expect(tx).to.not.emit(executor, "FeeTransferProcessed");
+    await expect(tx).to.not.emit(executor, "FeeTransferGasLimitExceeded");
+
+    // Target must execute all five calls.
+    expect(await target.calls()).to.equal(5n);
+
+    // Nonce must increment exactly once for a successful batch.
+    expect(await executor.nonce()).to.equal(1n);
+  });
+
+  it("Processes fee transfer when batch succeeds without early stop", async function () {
+    // Load fresh fixture state for this test.
+    const { executor, token, target, feeReceiver, relayer, deployer, executorEOA } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    // Mint enough fee token to cover the computed fee and keep max-fee checks non-binding.
+    const maxTokenFee = 1_000_000_000_000_000_000n;
+    await token.connect(deployer).mint(executorEOA.address, maxTokenFee);
+
+    // Build a fully successful two-call batch with fee enabled.
+    const gaslessBatchTx = makeGaslessBatchTx({
+      transactions: [
+        {
+          to: await target.getAddress(),
+          value: 0n,
+          gasLimit: 200_000n,
+          data: target.interface.encodeFunctionData("ok", ["0xAAAA"]),
+        },
+        {
+          to: await target.getAddress(),
+          value: 0n,
+          gasLimit: 200_000n,
+          data: target.interface.encodeFunctionData("ok", ["0xBBBB"]),
+        },
+      ],
+      feeToken: await token.getAddress(),
+      maxTokenFee,
+      coinPriceInToken: 1_000_000_000_000_000_000n,
+      feeTransferGasLimit: 100_000n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    // Produce a valid batch signature from executorEOA.
+    const { signature } = await signGaslessBatchTx({
+      conn,
+      executorSigner: await ethers.getSigner(executorEOA.address),
+      executorAddress: executorEOA.address,
+      gaslessBatchTx,
+    });
+
+    // Snapshot balances so we can verify the fee transfer delta exactly.
+    const executorBalBefore = await token.balanceOf(executorEOA.address);
+    const receiverBalBefore = await token.balanceOf(feeReceiver.address);
+
+    // Execute with non-zero gas price so computed feeAmount is non-zero.
+    const tx = await executor.connect(relayer).executeBatchTransaction(
+      gaslessBatchTx,
+      signature,
+      false,
+      { gasPrice: 1_000_000_000n, gasLimit: 6_000_000n }
+    );
+
+    // Successful batch with fee enabled must emit fee processing and batch completion.
+    await expect(tx).to.emit(executor, "FeeTransferProcessed");
+    await expect(tx).to.not.emit(executor, "FeeTransferGasLimitExceeded");
+    await expect(tx)
+      .to.emit(executor, "BatchTransactionExecuted")
+      .withArgs(executorEOA.address, 0n, 2n, 2n);
+
+    // All target calls must execute.
+    expect(await target.calls()).to.equal(2n);
+
+    // Parse FeeTransferProcessed to extract the exact feeAmount.
+    const receipt = await tx.wait();
+    const feeLog = receipt.logs
+      .map((l) => {
+        try {
+          return executor.interface.parseLog(l);
+        } catch {
+          return null;
+        }
+      })
+      .find((p) => p && p.name === "FeeTransferProcessed");
+
+    expect(feeLog).to.not.equal(undefined);
+
+    const feeAmount = feeLog.args.feeAmount;
+
+    // Compare post-state balances against emitted feeAmount.
+    const executorBalAfter = await token.balanceOf(executorEOA.address);
+    const receiverBalAfter = await token.balanceOf(feeReceiver.address);
+
+    expect(receiverBalAfter - receiverBalBefore).to.equal(feeAmount);
+    expect(executorBalBefore - executorBalAfter).to.equal(feeAmount);
+
+    // Nonce must increment because the batch completed successfully.
+    expect(await executor.nonce()).to.equal(1n);
+  });
+
+  it("Supports ERC165, ERC721Receiver, and ERC1155Receiver interfaces", async function () {
+    // Load fresh fixture state for this test.
+    const { executor } = await networkHelpers.loadFixture(deployExecutorFixture);
+
+    // IERC165 interface ID.
+    expect(await executor.supportsInterface("0x01ffc9a7")).to.equal(true);
+
+    // IERC721Receiver interface ID.
+    expect(await executor.supportsInterface("0x150b7a02")).to.equal(true);
+
+    // IERC1155Receiver interface ID (onERC1155Received + onERC1155BatchReceived).
+    expect(await executor.supportsInterface("0x4e2312e0")).to.equal(true);
+
+    // Invalid interface ID must not be supported.
+    expect(await executor.supportsInterface("0xffffffff")).to.equal(false);
   });
 });

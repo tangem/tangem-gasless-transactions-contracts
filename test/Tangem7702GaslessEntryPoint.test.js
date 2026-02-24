@@ -275,4 +275,223 @@ describe("Tangem7702GaslessEntryPoint", function () {
     // Mock stores keccak256(signature) so we can assert it without saving dynamic bytes.
     expect(await executorAsMock.lastSignatureHash()).to.equal(ethers.keccak256(signature));
   });
+
+  it("Reverts with InvalidDelegate when executor is not delegated in batch path", async function () {
+    // Pull contracts + actors from a fresh snapshot.
+    const { c, entryPoint, requiredDelegate, executorEOA, feeReceiverEOA } =
+      await conn.networkHelpers.loadFixture(deployEntryPointFixture);
+
+    // Use ethers from the same connection used by the fixture.
+    const { ethers } = c;
+
+    // Build a minimal batch payload; EntryPoint validates only delegation and then forwards.
+    const gaslessBatchTx = {
+      transactions: [
+        {
+          to: feeReceiverEOA.address,
+          value: 0n,
+          gasLimit: DEFAULT_CALL_GAS_LIMIT,
+          data: "0x",
+        },
+        {
+          to: feeReceiverEOA.address,
+          value: 0n,
+          gasLimit: DEFAULT_CALL_GAS_LIMIT,
+          data: "0x",
+        },
+      ],
+      fee: {
+        feeToken: ethers.ZeroAddress,
+        maxTokenFee: 0n,
+        coinPriceInToken: 0n,
+        feeTransferGasLimit: 0n,
+        baseGas: 0n,
+        feeReceiver: feeReceiverEOA.address,
+      },
+      nonce: 0n,
+    };
+
+    // Do not install delegation designator on executorEOA, so fetchDelegate() returns zero.
+    await expect(
+      entryPoint.executeBatchTransaction(
+        gaslessBatchTx,
+        "0x1234",
+        false,
+        executorEOA.address
+      )
+    )
+      .to.be.revertedWithCustomError(entryPoint, "InvalidDelegate")
+      .withArgs(
+        executorEOA.address,
+        await requiredDelegate.getAddress(),
+        ethers.ZeroAddress
+      );
+  });
+
+  it("Reverts with InvalidDelegate when executor delegates to a different contract in batch path", async function () {
+    // Pull clean state from fixture snapshot.
+    const {
+      c,
+      entryPoint,
+      requiredDelegate,
+      otherDelegate,
+      executorEOA,
+      feeReceiverEOA,
+    } = await conn.networkHelpers.loadFixture(deployEntryPointFixture);
+
+    // Use ethers from the same connection used by the fixture.
+    const { ethers } = c;
+
+    // Install a different delegate than the one required by EntryPoint.
+    await set7702Delegate(c, executorEOA.address, await otherDelegate.getAddress());
+
+    // Build a minimal batch payload; EntryPoint should revert before forwarding.
+    const gaslessBatchTx = {
+      transactions: [
+        {
+          to: feeReceiverEOA.address,
+          value: 0n,
+          gasLimit: DEFAULT_CALL_GAS_LIMIT,
+          data: "0x",
+        },
+        {
+          to: feeReceiverEOA.address,
+          value: 0n,
+          gasLimit: DEFAULT_CALL_GAS_LIMIT,
+          data: "0x",
+        },
+      ],
+      fee: {
+        feeToken: ethers.ZeroAddress,
+        maxTokenFee: 0n,
+        coinPriceInToken: 0n,
+        feeTransferGasLimit: 0n,
+        baseGas: 0n,
+        feeReceiver: feeReceiverEOA.address,
+      },
+      nonce: 0n,
+    };
+
+    // EntryPoint must reject forwarding because actualDelegate != requiredDelegateAddress.
+    await expect(
+      entryPoint.executeBatchTransaction(
+        gaslessBatchTx,
+        "0x1234",
+        true,
+        executorEOA.address
+      )
+    )
+      .to.be.revertedWithCustomError(entryPoint, "InvalidDelegate")
+      .withArgs(
+        executorEOA.address,
+        await requiredDelegate.getAddress(),
+        await otherDelegate.getAddress()
+      );
+  });
+
+  it("Bubbles executor revert in batch path when delegation matches required delegate", async function () {
+    // Load snapshot for a deterministic baseline.
+    const {
+      c,
+      entryPoint,
+      requiredDelegate,
+      executorEOA,
+      feeReceiverEOA,
+      randomCaller,
+    } = await conn.networkHelpers.loadFixture(deployEntryPointFixture);
+
+    // Use ethers from the same connection used by the fixture.
+    const { ethers } = c;
+
+    // Install the required delegate so EntryPoint passes the delegation check and forwards the batch call.
+    await set7702Delegate(c, executorEOA.address, await requiredDelegate.getAddress());
+
+    // Build a valid-looking batch payload. EntryPoint only validates delegation and forwards.
+    const gaslessBatchTx = {
+      transactions: [
+        {
+          to: feeReceiverEOA.address,
+          value: 1n,
+          gasLimit: 210_000n,
+          data: "0x11223344",
+        },
+        {
+          to: feeReceiverEOA.address,
+          value: 2n,
+          gasLimit: 220_000n,
+          data: "0xaabbccdd",
+        },
+      ],
+      fee: {
+        feeToken: ethers.ZeroAddress,
+        maxTokenFee: 555n,
+        coinPriceInToken: 0n,
+        feeTransferGasLimit: 0n,
+        baseGas: 0n,
+        feeReceiver: feeReceiverEOA.address,
+      },
+      nonce: 888n,
+    };
+
+    // The current mock delegate does not implement the batch path, so the delegated executor reverts.
+    // This still covers the EntryPoint "happy path" up to forwarding (i.e. delegate check passed).
+    await expect(
+      entryPoint.connect(randomCaller).executeBatchTransaction(
+        gaslessBatchTx,
+        "0x" + "22".repeat(65),
+        true,
+        executorEOA.address,
+        { gasLimit: 5_000_000n }
+      )
+    ).to.revert(ethers);
+  });
+
+  it("Reverts with InvalidDelegate in batch path regardless of external caller", async function () {
+    // Pull contracts + actors from a fresh snapshot.
+    const { c, entryPoint, requiredDelegate, executorEOA, feeReceiverEOA, randomCaller } =
+      await conn.networkHelpers.loadFixture(deployEntryPointFixture);
+
+    // Use ethers from the same connection used by the fixture.
+    const { ethers } = c;
+
+    // Build a minimal batch payload; EntryPoint validates delegation before forwarding.
+    const gaslessBatchTx = {
+      transactions: [
+        {
+          to: feeReceiverEOA.address,
+          value: 0n,
+          gasLimit: DEFAULT_CALL_GAS_LIMIT,
+          data: "0x",
+        },
+        {
+          to: feeReceiverEOA.address,
+          value: 0n,
+          gasLimit: DEFAULT_CALL_GAS_LIMIT,
+          data: "0x",
+        },
+      ],
+      fee: {
+        feeToken: ethers.ZeroAddress,
+        maxTokenFee: 0n,
+        coinPriceInToken: 0n,
+        feeTransferGasLimit: 0n,
+        baseGas: 0n,
+        feeReceiver: feeReceiverEOA.address,
+      },
+      nonce: 0n,
+    };
+
+    // Do not install delegation designator on executorEOA. The caller should not matter.
+    await expect(
+      entryPoint
+        .connect(randomCaller)
+        .executeBatchTransaction(gaslessBatchTx, "0x1234", false, executorEOA.address)
+    )
+      .to.be.revertedWithCustomError(entryPoint, "InvalidDelegate")
+      .withArgs(
+        executorEOA.address,
+        await requiredDelegate.getAddress(),
+        ethers.ZeroAddress
+      );
+  });
 });
