@@ -19,14 +19,6 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
     ///      Using 1e18 keeps the math consistent with ETH-denominated gas costs.
     uint256 private constant PRICE_PRECISION = 1 ether;
 
-    /// @notice Maximum number of calls allowed in a batch transaction.
-    /// @dev Bounds calldata hashing and execution work in `executeBatchTransaction`.
-    uint256 private constant MAX_BATCH_CALLS = 5;
-
-    /// @notice Extra gas reserved for batch bookkeeping beyond per-call gas limits.
-    /// @dev Intended to reduce OOG risk after the last user call (loop overhead, events, fee math, etc.).
-    uint256 private constant BATCH_OVERHEAD = 35_000;
-
     // EIP-712 types
     string private constant GASLESS_TRANSACTION_TYPE =
         "GaslessTransaction(Transaction transaction,Fee fee,uint256 nonce)";
@@ -75,15 +67,15 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
         Transaction calldata transaction = gaslessTx.transaction;
 
         require(transaction.to != address(0), ZeroTarget());
-        if (transaction.data.length > 0) {
-            require(transaction.data.length >= 4, DataTooShort());
-        }
 
         _verifyGaslessTransaction(gaslessTx, signature);
 
-        _requireCanForwardGas(transaction.gasLimit, _reservedPostCallGas(gaslessTx.fee));
+        require(
+            gasleft() >= transaction.gasLimit + _reservedPostCallGas(gaslessTx.fee),
+            InsufficientGas()
+        );
 
-        (bool success, bytes memory returnData) 
+        (bool success, bytes memory returnData)
             = transaction.to.call{value: transaction.value, gas: transaction.gasLimit}(transaction.data);
 
         if (!success) {
@@ -131,16 +123,13 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
         uint256 startGas = gasleft();
 
         Transaction[] calldata txs = gaslessTx.transactions;
-        require(txs.length >= 2 && txs.length <= MAX_BATCH_CALLS, InvalidCallsLength());
+        require(txs.length >= 2, InvalidCallsLength());
 
         uint256 totalGasLimit = 0;
         for (uint256 i = 0; i < txs.length; ) {
             Transaction calldata transaction = txs[i];
 
             require(transaction.to != address(0), ZeroTarget());
-            if (transaction.data.length > 0) {
-                require(transaction.data.length >= 4, DataTooShort());
-            }
 
             totalGasLimit += transaction.gasLimit;
             unchecked {
@@ -150,22 +139,15 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
 
         _verifyGaslessBatchTransaction(gaslessTx, signature);
 
-        uint256 reservedBase = _reservedPostCallGas(gaslessTx.fee) + BATCH_OVERHEAD;
+        uint256 reservedBase = _reservedPostCallGas(gaslessTx.fee) + _batchCallOverhead() * txs.length;
         require(gasleft() >= totalGasLimit + reservedBase, InsufficientGas());
 
-        uint256 remainingGasLimits = totalGasLimit;
         uint256 executedCalls = 0;
 
         for (uint256 i = 0; i < txs.length; ) {
             Transaction calldata transaction = txs[i];
 
-            remainingGasLimits -= transaction.gasLimit;
-
-            // EIP-150 safety: ensure we can forward `transaction.gasLimit` and still have enough gas
-            // for the rest of the batch + post-call work.
-            _requireCanForwardGas(transaction.gasLimit, reservedBase + remainingGasLimits);
-
-            (bool success, bytes memory returnData) 
+            (bool success, bytes memory returnData)
                 = transaction.to.call{value: transaction.value, gas: transaction.gasLimit}(transaction.data);
 
             if (!success) {
@@ -198,9 +180,9 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
         }
 
         emit BatchTransactionExecuted(
-            address(this), 
-            gaslessTx.nonce, 
-            txs.length, 
+            address(this),
+            gaslessTx.nonce,
+            txs.length,
             executedCalls
         );
     }
@@ -322,21 +304,6 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
         }
     }
 
-    /// @notice Checks that the current frame can safely forward `want` gas to a call and still keep `reserved` gas.
-    /// @dev Enforces two independent constraints:
-    ///      1) Post-call reserve: `gasleft() >= want + reserved`.
-    ///      2) EIP-150 cap: the call can receive at most `gasleft() - gasleft()/64`, so require that >= `want`.
-    /// @param want Gas to forward to the call (`gasLimit`).
-    /// @param reserved Gas that must remain after the call (for remaining batch calls + fee + bookkeeping).
-    function _requireCanForwardGas(uint256 want, uint256 reserved) private view {
-        uint256 gas = gasleft();
-
-        require(gas >= want + reserved, InsufficientGas());
-
-        uint256 maxForwardable = gas - (gas / 64);
-        require(maxForwardable >= want, InsufficientGasEip150());
-    }
-
     /// @notice Computes the EIP-712 struct hash for a `Transaction`.
     /// @dev Encodes fields with `TRANSACTION_TYPEHASH` per EIP-712.
     /// @param transaction The transaction parameters being signed.
@@ -441,6 +408,14 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
     ///      to account for chain-specific oracle costs.
     /// @return Gas units to reserve for post-call operations.
     function _baseGasAfterCall() internal view virtual returns (uint256);
+
+    /// @notice Per-call gas overhead for batch execution loop iterations.
+    /// @dev Accounts for loop body overhead beyond the user-specified `gasLimit` for each call:
+    ///      CALL opcode base cost (100 warm), calldata copy, success check, counter update, jump.
+    ///      Measured via gasleft() instrumentation: ~1085 gas/iteration. Value 1200 includes ~10% margin.
+    ///      Multiplied by `transactions.length` in `executeBatchTransaction` to compute total batch reserve.
+    /// @return Gas units to reserve per call in a batch.
+    function _batchCallOverhead() internal view virtual returns (uint256);
 
     function supportsInterface(bytes4 interfaceId) 
         public 
