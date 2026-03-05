@@ -98,21 +98,13 @@ interface ITangem7702GaslessExecutor {
     /// @notice Thrown when a target is the zero address.
     error ZeroTarget();
 
-    /// @notice Thrown when calldata is non-empty but shorter than 4 bytes.
-    /// @dev Prevents ambiguous “non-selector” calldata while still allowing empty calldata.
-    error DataTooShort();
-
     /// @notice Thrown when `transactions.length` is invalid for batch execution.
-    /// @dev Batch requires at least 2 calls and at most MAX_BATCH_CALLS calls (enforced in implementation).
+    /// @dev Batch requires at least 2 calls.
     error InvalidCallsLength();
 
     /// @notice Thrown when there isn't enough gas to safely execute call(s) plus overheads.
     /// @dev Used for both single and batch post-call reserve checks.
     error InsufficientGas();
-
-    /// @notice Thrown when EIP-150 prevents forwarding the requested gas amount.
-    /// @dev Even if `gasleft()` is large, EIP-150 caps forwarded gas to `gas - gas/64`.
-    error InsufficientGasEip150();
 
     /// @notice Thrown when a batch call fails without revert data and `forced` is false.
     /// @dev If the failed call returned non-empty revert data, that revert data is bubbled instead.

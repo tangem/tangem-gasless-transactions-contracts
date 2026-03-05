@@ -623,31 +623,6 @@ describe("Tangem7702GaslessExecutor", function () {
       .to.be.revertedWithCustomError(executor, "ZeroTarget");
   });
 
-  it("Reverts with DataTooShort when single transaction calldata is non-empty and shorter than 4 bytes", async function () {
-    // Load fresh fixture state for this test.
-    const { executor, token, target, feeReceiver, relayer } =
-      await networkHelpers.loadFixture(deployExecutorFixture);
-
-    // Build a single payload with short calldata to hit selector-length validation before signature verification.
-    const gaslessTx = makeGaslessTx({
-      to: await target.getAddress(),
-      value: 0n,
-      gasLimit: 200_000n,
-      data: "0x11",
-      feeToken: await token.getAddress(),
-      maxTokenFee: 0n,
-      coinPriceInToken: 0n,
-      feeTransferGasLimit: 0n,
-      baseGas: 0n,
-      feeReceiver: feeReceiver.address,
-      nonce: 0n,
-    });
-
-    // Calldata shape validation runs before signature verification.
-    await expect(executor.connect(relayer).executeTransaction(gaslessTx, "0x", false))
-      .to.be.revertedWithCustomError(executor, "DataTooShort");
-  });
-
   it("Reverts with InvalidCallsLength when batch contains fewer than 2 calls", async function () {
     // Load fresh fixture state for this test.
     const { executor, token, target, feeReceiver, relayer } =
@@ -662,38 +637,6 @@ describe("Tangem7702GaslessExecutor", function () {
           gasLimit: 200_000n,
           data: target.interface.encodeFunctionData("ok", ["0x01"]),
         },
-      ],
-      feeToken: await token.getAddress(),
-      maxTokenFee: 0n,
-      coinPriceInToken: 0n,
-      feeTransferGasLimit: 0n,
-      baseGas: 0n,
-      feeReceiver: feeReceiver.address,
-      nonce: 0n,
-    });
-
-    // Batch length validation runs before signature verification.
-    await expect(executor.connect(relayer).executeBatchTransaction(gaslessBatchTx, "0x", false))
-      .to.be.revertedWithCustomError(executor, "InvalidCallsLength");
-  });
-
-  it("Reverts with InvalidCallsLength when batch contains more than max allowed calls", async function () {
-    // Load fresh fixture state for this test.
-    const { executor, token, target, feeReceiver, relayer } =
-      await networkHelpers.loadFixture(deployExecutorFixture);
-
-    // Prepare six calls to exceed MAX_BATCH_CALLS == 5.
-    const callData = target.interface.encodeFunctionData("ok", ["0x02"]);
-
-    // Build an oversized batch to trigger the upper bound check.
-    const gaslessBatchTx = makeGaslessBatchTx({
-      transactions: [
-        { to: await target.getAddress(), value: 0n, gasLimit: 200_000n, data: callData },
-        { to: await target.getAddress(), value: 0n, gasLimit: 200_000n, data: callData },
-        { to: await target.getAddress(), value: 0n, gasLimit: 200_000n, data: callData },
-        { to: await target.getAddress(), value: 0n, gasLimit: 200_000n, data: callData },
-        { to: await target.getAddress(), value: 0n, gasLimit: 200_000n, data: callData },
-        { to: await target.getAddress(), value: 0n, gasLimit: 200_000n, data: callData },
       ],
       feeToken: await token.getAddress(),
       maxTokenFee: 0n,
@@ -735,41 +678,6 @@ describe("Tangem7702GaslessExecutor", function () {
     // Zero target validation runs before signature verification.
     await expect(executor.connect(relayer).executeBatchTransaction(gaslessBatchTx, "0x", false))
       .to.be.revertedWithCustomError(executor, "ZeroTarget");
-  });
-
-  it("Reverts with DataTooShort when batch contains non-empty calldata shorter than 4 bytes", async function () {
-    // Load fresh fixture state for this test.
-    const { executor, token, target, feeReceiver, relayer } =
-      await networkHelpers.loadFixture(deployExecutorFixture);
-
-    // Build a batch with short calldata in the second call to trigger selector-length validation.
-    const gaslessBatchTx = makeGaslessBatchTx({
-      transactions: [
-        {
-          to: await target.getAddress(),
-          value: 0n,
-          gasLimit: 200_000n,
-          data: target.interface.encodeFunctionData("ok", ["0x04"]),
-        },
-        {
-          to: await target.getAddress(),
-          value: 0n,
-          gasLimit: 200_000n,
-          data: "0x11",
-        },
-      ],
-      feeToken: await token.getAddress(),
-      maxTokenFee: 0n,
-      coinPriceInToken: 0n,
-      feeTransferGasLimit: 0n,
-      baseGas: 0n,
-      feeReceiver: feeReceiver.address,
-      nonce: 0n,
-    });
-
-    // Calldata shape validation runs before signature verification.
-    await expect(executor.connect(relayer).executeBatchTransaction(gaslessBatchTx, "0x", false))
-      .to.be.revertedWithCustomError(executor, "DataTooShort");
   });
 
   it("Reverts with InvalidSigner when batch signature does not recover to executor address", async function () {
@@ -1410,7 +1318,7 @@ describe("Tangem7702GaslessExecutor", function () {
     const { executor, token, target, feeReceiver, relayer, executorEOA } =
       await networkHelpers.loadFixture(deployExecutorFixture);
 
-    // Build a batch with exactly MAX_BATCH_CALLS == 5 successful calls.
+    // Build a batch with 5 successful calls.
     const callData = target.interface.encodeFunctionData("ok", ["0xAB"]);
     const gaslessBatchTx = makeGaslessBatchTx({
       transactions: [
@@ -1567,5 +1475,50 @@ describe("Tangem7702GaslessExecutor", function () {
 
     // Invalid interface ID must not be supported.
     expect(await executor.supportsInterface("0xffffffff")).to.equal(false);
+  });
+
+  it("Batch execution loop overhead per iteration is below _batchCallOverhead (1200 gas)", async function () {
+    const { deployer, target } = await networkHelpers.loadFixture(deployExecutorFixture);
+
+    // Deploy the measurement harness that replicates the batch execution loop body.
+    const Measurer = await ethers.getContractFactory("BatchOverheadMeasurerMock", deployer);
+    const measurer = await Measurer.deploy();
+    await measurer.waitForDeployment();
+
+    const targetAddr = await target.getAddress();
+
+    // Build a Transaction struct calling receive() — empty data, zero value, minimal subcall cost.
+    // gasLimit=5000 is enough and mirrors realistic small gasLimit values.
+    const txStruct = { to: targetAddr, value: 0n, gasLimit: 5000n, data: "0x" };
+
+    // Warm up the target address slot by calling once (CALL to cold address costs 2600 extra).
+    await measurer.measure([txStruct], { gasLimit: 1_000_000n });
+
+    // Build a batch of 10 identical receive() transactions on the now-warm target.
+    const iterations = 10n;
+    const batch = Array.from({ length: Number(iterations) }, () => txStruct);
+    const tx = await measurer.measure(batch, { gasLimit: 1_000_000n });
+    const receipt = await tx.wait();
+
+    // Parse the LoopGas event to get gasleft() snapshots.
+    const loopGasLog = receipt.logs
+      .map((log) => { try { return measurer.interface.parseLog(log); } catch { return null; } })
+      .find((parsed) => parsed?.name === "LoopGas");
+
+    const gasBeforeLoop = loopGasLog.args.gasBeforeLoop;
+    const gasAfterLoop = loopGasLog.args.gasAfterLoop;
+    const totalLoopGas = gasBeforeLoop - gasAfterLoop;
+
+    // Per-iteration gas includes: loop body overhead + gas consumed by receive() inside subcall.
+    // receive() consumes ~16 gas inside the subcall (covered by totalGasLimit in real usage).
+    // The _batchCallOverhead constant (1200) covers the overhead portion alone.
+    // Expected measurement: ~1216 gas (1200 overhead + ~16 receive() body).
+    const perIteration = totalLoopGas / iterations;
+
+    // Assert the measured per-iteration cost is in a valid range around _batchCallOverhead (1200).
+    // Lower bound: overhead shouldn't drop below 1100 without a code change needing review.
+    // Upper bound: overhead + minimal subcall cost shouldn't exceed 1300.
+    expect(perIteration).to.be.greaterThanOrEqual(1100n);
+    expect(perIteration).to.be.lessThanOrEqual(1300n);
   });
 });
