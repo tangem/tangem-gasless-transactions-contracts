@@ -39,4 +39,9 @@ contract Tangem7702GaslessExecutorOP is
     function _baseGasAfterCall() internal pure override returns (uint256) {
         return 18000; // GasPriceOracle predeploy can be expensive when cold (~11k gas)
     }
+
+    /// @inheritdoc Tangem7702GaslessExecutor
+    function _batchCallOverhead() internal pure override returns (uint256) {
+        return 1200; // Measured ~1085 gas/iteration via gasleft() instrumentation + 10% margin
+    }
 }

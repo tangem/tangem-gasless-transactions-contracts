@@ -22,14 +22,19 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
     // EIP-712 types
     string private constant GASLESS_TRANSACTION_TYPE =
         "GaslessTransaction(Transaction transaction,Fee fee,uint256 nonce)";
+    string private constant GASLESS_BATCH_TRANSACTION_TYPE =
+        "GaslessBatchTransaction(Transaction[] transactions,Fee fee,uint256 nonce)";
     string private constant FEE_TYPE =
         "Fee(address feeToken,uint256 maxTokenFee,uint256 coinPriceInToken,uint256 feeTransferGasLimit,uint256 baseGas,address feeReceiver)";
     string private constant TRANSACTION_TYPE =
-        "Transaction(address to,uint256 value,bytes data)";
+        "Transaction(address to,uint256 value,uint256 gasLimit,bytes data)";
 
     // EIP-712 type hashes
     bytes32 private constant GASLESS_TRANSACTION_TYPEHASH = keccak256(
         abi.encodePacked(GASLESS_TRANSACTION_TYPE, FEE_TYPE, TRANSACTION_TYPE)
+    );
+    bytes32 private constant GASLESS_BATCH_TRANSACTION_TYPEHASH = keccak256(
+        abi.encodePacked(GASLESS_BATCH_TRANSACTION_TYPE, FEE_TYPE, TRANSACTION_TYPE)
     );
     bytes32 private constant FEE_TYPEHASH = keccak256(bytes(FEE_TYPE));
     bytes32 private constant TRANSACTION_TYPEHASH = keccak256(bytes(TRANSACTION_TYPE));
@@ -59,25 +64,33 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
     {
         uint256 startGas = gasleft();
 
+        Transaction calldata transaction = gaslessTx.transaction;
+
+        require(transaction.to != address(0), ZeroTarget());
+
         _verifyGaslessTransaction(gaslessTx, signature);
 
-        uint256 callGas = gasleft() - gaslessTx.fee.feeTransferGasLimit - _baseGasAfterCall();
-        (bool success, bytes memory returnData) =
-            gaslessTx.transaction.to.call{value: gaslessTx.transaction.value, gas: callGas}(gaslessTx.transaction.data);
+        require(
+            gasleft() >= transaction.gasLimit + _reservedPostCallGas(gaslessTx.fee),
+            InsufficientGas()
+        );
+
+        (bool success, bytes memory returnData)
+            = transaction.to.call{value: transaction.value, gas: transaction.gasLimit}(transaction.data);
 
         if (!success) {
             if (forced) {
                 emit ExecutionFailed(
-                    gaslessTx.transaction.to,
-                    gaslessTx.transaction.value,
-                    _selector(gaslessTx.transaction.data)
+                    transaction.to,
+                    transaction.value,
+                    _selector(transaction.data)
                 );
             } else {
                 if (returnData.length == 0) {
                     revert ExecutionFailedNotForced(
-                        gaslessTx.transaction.to,
-                        gaslessTx.transaction.value,
-                        _selector(gaslessTx.transaction.data)
+                        transaction.to,
+                        transaction.value,
+                        _selector(transaction.data)
                     );
                 }
                 assembly {
@@ -93,9 +106,84 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
         emit TransactionExecuted(
             address(this),
             gaslessTx.nonce,
-            gaslessTx.transaction.to,
-            gaslessTx.transaction.value,
-            _selector(gaslessTx.transaction.data)
+            transaction.to,
+            transaction.value,
+            _selector(transaction.data)
+        );
+    }
+
+    /// @inheritdoc ITangem7702GaslessExecutor
+    function executeBatchTransaction(
+        GaslessBatchTransaction calldata gaslessTx,
+        bytes calldata signature,
+        bool forced
+    )
+        external
+    {
+        uint256 startGas = gasleft();
+
+        Transaction[] calldata txs = gaslessTx.transactions;
+        require(txs.length >= 2, InvalidCallsLength());
+
+        uint256 totalGasLimit = 0;
+        for (uint256 i = 0; i < txs.length; ) {
+            Transaction calldata transaction = txs[i];
+
+            require(transaction.to != address(0), ZeroTarget());
+
+            totalGasLimit += transaction.gasLimit;
+            unchecked {
+                ++i;
+            }
+        }
+
+        _verifyGaslessBatchTransaction(gaslessTx, signature);
+
+        uint256 reservedBase = _reservedPostCallGas(gaslessTx.fee) + _batchCallOverhead() * txs.length;
+        require(gasleft() >= totalGasLimit + reservedBase, InsufficientGas());
+
+        uint256 executedCalls = 0;
+
+        for (uint256 i = 0; i < txs.length; ) {
+            Transaction calldata transaction = txs[i];
+
+            (bool success, bytes memory returnData)
+                = transaction.to.call{value: transaction.value, gas: transaction.gasLimit}(transaction.data);
+
+            if (!success) {
+                if (forced) {
+                    emit BatchCallFailed(i, transaction.to, transaction.value, _selector(transaction.data));
+                    break;
+                } else {
+                    if (returnData.length == 0) {
+                        revert BatchExecutionFailedNotForced(
+                            i, 
+                            transaction.to, 
+                            transaction.value, 
+                            _selector(transaction.data)
+                        );
+                    }
+                    assembly {
+                        revert(add(returnData, 0x20), mload(returnData))
+                    }
+                }
+            }
+
+            executedCalls = i + 1;
+            unchecked {
+                ++i;
+            }
+        }
+
+        if (gaslessTx.fee.coinPriceInToken > 0) {
+            _processFeeTransfer(gaslessTx.fee, startGas, forced);
+        }
+
+        emit BatchTransactionExecuted(
+            address(this),
+            gaslessTx.nonce,
+            txs.length,
+            executedCalls
         );
     }
 
@@ -105,8 +193,15 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
     ///      then converts the native coin cost (`totalGas * tx.gasprice`) into `feeToken`
     ///      using `fee.coinPriceInToken / PRICE_PRECISION`. Measures the gas spent by the
     ///      fee transfer itself and enforces `feeTransferGasLimit` depending on `forced`.
+    ///
+    ///      Strict invariants (NEVER softened by `forced`):
+    ///      - `feeAmount <= fee.maxTokenFee`
+    ///      - `balance(feeToken) >= feeAmount`
+    ///
+    ///      Softened only when `forced=true`:
+    ///      - exceeding `feeTransferGasLimit` emits {FeeTransferGasLimitExceeded} instead of reverting.
     /// @param fee Fee parameters used for computation and the token transfer.
-    /// @param startGas Gas snapshot taken at the start of `executeTransaction` funtion.
+    /// @param startGas Gas snapshot taken at the start of `executeTransaction` / `executeBatchTransaction`.
     /// @param forced If true, exceeding `feeTransferGasLimit` is reported via an event; otherwise it reverts.
     function _processFeeTransfer(
         Fee calldata fee,
@@ -175,6 +270,40 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
         }
     }
 
+    /// @notice Verifies a batch gasless transaction EIP-712 signature and consumes the nonce.
+    /// @dev Same semantics as `_verifyGaslessTransaction`, but hashes `Transaction[]` per EIP-712 rules.
+    /// @param gaslessTx The batch payload being authorized (calls, fee config, and nonce).
+    /// @param signature The EIP-712 signature over the typed data digest produced by the executor account.
+    function _verifyGaslessBatchTransaction(
+        GaslessBatchTransaction calldata gaslessTx,
+        bytes calldata signature
+    )
+        private
+    {
+        require(gaslessTx.nonce == nonce, InvalidNonce(nonce, gaslessTx.nonce));
+
+        bytes32 structHash = _hashGaslessBatchTransaction(gaslessTx);
+        bytes32 digest = _hashTypedDataV4(structHash);
+        address signer = ECDSA.recover(digest, signature);
+
+        require(signer == address(this), InvalidSigner(signer, address(this)));
+
+        unchecked {
+            ++nonce;
+        }
+    }
+
+    /// @notice Returns the amount of gas to reserve for post-call operations.
+    /// @dev Always includes `_baseGasAfterCall()`.
+    ///      Includes `feeTransferGasLimit` only when fee is enabled (`coinPriceInToken > 0`),
+    ///      because fee processing is skipped otherwise.
+    function _reservedPostCallGas(Fee calldata fee) private view returns (uint256 reserved) {
+        reserved = _baseGasAfterCall();
+        if (fee.coinPriceInToken > 0) {
+            reserved += fee.feeTransferGasLimit;
+        }
+    }
+
     /// @notice Computes the EIP-712 struct hash for a `Transaction`.
     /// @dev Encodes fields with `TRANSACTION_TYPEHASH` per EIP-712.
     /// @param transaction The transaction parameters being signed.
@@ -185,9 +314,26 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
                 TRANSACTION_TYPEHASH,
                 transaction.to,
                 transaction.value,
+                transaction.gasLimit,
                 keccak256(transaction.data)
             )
         );
+    }
+
+    /// @notice Computes the EIP-712 array hash for `Transaction[]`.
+    /// @dev Hashes each element as `keccak256(abi.encode(TransactionTypeHash,...))`, then:
+    ///      `keccak256(abi.encodePacked(txHash_0, txHash_1, ...))`.
+    /// @param txs Array of transactions.
+    /// @return hash Array hash suitable for inclusion into the EIP-712 struct hash.
+    function _hashTransactions(Transaction[] calldata txs) private pure returns (bytes32) {
+        bytes32[] memory hashes = new bytes32[](txs.length);
+        for (uint256 i = 0; i < txs.length; ) {
+            hashes[i] = _hashTransaction(txs[i]);
+            unchecked {
+                ++i;
+            }
+        }
+        return keccak256(abi.encodePacked(hashes));
     }
 
     /// @notice Computes the EIP-712 struct hash for a `Fee`.
@@ -223,6 +369,21 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
         );
     }
 
+    /// @notice Computes the EIP-712 struct hash for a `GaslessBatchTransaction`.
+    /// @dev Encodes `transactions` as an EIP-712 array hash (see `_hashTransactions`) and combines with `Fee` and `nonce`.
+    /// @param gaslessTx The batch payload being signed.
+    /// @return hash The EIP-712 struct hash of `GaslessBatchTransaction`.
+    function _hashGaslessBatchTransaction(GaslessBatchTransaction calldata gaslessTx) private pure returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                GASLESS_BATCH_TRANSACTION_TYPEHASH,
+                _hashTransactions(gaslessTx.transactions),
+                _hashFee(gaslessTx.fee),
+                gaslessTx.nonce
+            )
+        );
+    }
+
     /// @notice Extracts the function selector from calldata.
     /// @dev Returns `bytes4(0)` when `data.length < 4`.
     /// @param data ABI-encoded calldata.
@@ -235,8 +396,8 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
         }
     }
 
-    /// @notice Get L1 data fee in wei for the current transaction
-    /// @dev Should return 0 for non-L2 chains
+    /// @notice Returns the L1 data fee in wei for the current transaction.
+    /// @dev Should return 0 on L1 chains. L2 implementations may override to include DA/calldata cost.
     function _getL1Fee() internal view virtual returns (uint256);
 
     /// @notice Gas reserved for post-call operations in `executeTransaction`.
@@ -247,6 +408,14 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
     ///      to account for chain-specific oracle costs.
     /// @return Gas units to reserve for post-call operations.
     function _baseGasAfterCall() internal view virtual returns (uint256);
+
+    /// @notice Per-call gas overhead for batch execution loop iterations.
+    /// @dev Accounts for loop body overhead beyond the user-specified `gasLimit` for each call:
+    ///      CALL opcode base cost (100 warm), calldata copy, success check, counter update, jump.
+    ///      Measured via gasleft() instrumentation: ~1085 gas/iteration. Value 1200 includes ~10% margin.
+    ///      Multiplied by `transactions.length` in `executeBatchTransaction` to compute total batch reserve.
+    /// @return Gas units to reserve per call in a batch.
+    function _batchCallOverhead() internal view virtual returns (uint256);
 
     function supportsInterface(bytes4 interfaceId) 
         public 

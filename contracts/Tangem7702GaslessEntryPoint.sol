@@ -35,10 +35,25 @@ contract Tangem7702GaslessEntryPoint is ITangem7702GaslessEntryPoint {
             InvalidDelegate(executor, requiredDelegateAddress, actualDelegate)
         );
 
-        ITangem7702GaslessExecutor(payable(executor)).executeTransaction(
-            gaslessTx,
-            signature,
-            forced
+        ITangem7702GaslessExecutor(payable(executor)).executeTransaction(gaslessTx, signature, forced);
+    }
+
+    /// @inheritdoc ITangem7702GaslessEntryPoint
+    function executeBatchTransaction(
+        ITangem7702GaslessExecutor.GaslessBatchTransaction calldata gaslessTx,
+        bytes calldata signature,
+        bool forced,
+        address executor
+    )
+        external
+    {
+        address actualDelegate = executor.fetchDelegate();
+
+        require(
+            actualDelegate == requiredDelegateAddress,
+            InvalidDelegate(executor, requiredDelegateAddress, actualDelegate)
         );
+
+        ITangem7702GaslessExecutor(payable(executor)).executeBatchTransaction(gaslessTx, signature, forced);
     }
 }

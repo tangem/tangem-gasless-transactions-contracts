@@ -1,46 +1,53 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.33;
 
-import {ITangem7702GaslessExecutorMock} from "./interfaces/ITangem7702GaslessExecutorMock.sol";
+contract Tangem7702GaslessExecutorMock {
+    struct Transaction {
+        address to;
+        uint256 value;
+        uint256 gasLimit;
+        bytes data;
+    }
 
-contract Tangem7702GaslessExecutorMock is ITangem7702GaslessExecutorMock {
-    /// @inheritdoc ITangem7702GaslessExecutorMock
+    struct Fee {
+        address feeToken;
+        uint256 maxTokenFee;
+        uint256 coinPriceInToken;
+        uint256 feeTransferGasLimit;
+        uint256 baseGas;
+        address feeReceiver;
+    }
+
+    struct GaslessTransaction {
+        Transaction transaction;
+        Fee fee;
+        uint256 nonce;
+    }
+
     uint256 public calls;
 
-    /// @inheritdoc ITangem7702GaslessExecutorMock
     address public lastMsgSender;
 
-    /// @inheritdoc ITangem7702GaslessExecutorMock
     address public lastFeeReceiver;
 
-    /// @inheritdoc ITangem7702GaslessExecutorMock
     bool public lastForced;
 
-    /// @inheritdoc ITangem7702GaslessExecutorMock
     address public lastTo;
 
-    /// @inheritdoc ITangem7702GaslessExecutorMock
     uint256 public lastValue;
 
-    /// @inheritdoc ITangem7702GaslessExecutorMock
     bytes32 public lastDataHash;
 
-    /// @inheritdoc ITangem7702GaslessExecutorMock
     address public lastFeeToken;
 
-    /// @inheritdoc ITangem7702GaslessExecutorMock
     uint256 public lastMaxTokenFee;
 
-    /// @inheritdoc ITangem7702GaslessExecutorMock
     uint256 public lastGaslessNonce;
 
-    /// @inheritdoc ITangem7702GaslessExecutorMock
     bytes32 public lastSignatureHash;
 
-    /// @inheritdoc ITangem7702GaslessExecutorMock
     receive() external payable {}
 
-    /// @inheritdoc ITangem7702GaslessExecutorMock
     function executeTransaction(
         GaslessTransaction calldata gaslessTx,
         bytes calldata signature,
