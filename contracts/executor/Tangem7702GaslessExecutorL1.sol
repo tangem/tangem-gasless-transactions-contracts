@@ -19,9 +19,4 @@ contract Tangem7702GaslessExecutorL1 is
     function _baseGasAfterCall() internal pure override returns (uint256) {
         return 8000;
     }
-
-    /// @inheritdoc Tangem7702GaslessExecutor
-    function _batchCallOverhead() internal pure override returns (uint256) {
-        return 1200; // Measured ~1085 gas/iteration via gasleft() instrumentation + 10% margin
-    }
 }

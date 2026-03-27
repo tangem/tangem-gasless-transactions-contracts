@@ -1477,7 +1477,7 @@ describe("Tangem7702GaslessExecutor", function () {
     expect(await executor.supportsInterface("0xffffffff")).to.equal(false);
   });
 
-  it("Batch execution loop overhead per iteration is below _batchCallOverhead (1200 gas)", async function () {
+  it("Batch execution loop overhead per iteration is below BATCH_LOOP_OVERHEAD (1200 gas)", async function () {
     const { deployer, target } = await networkHelpers.loadFixture(deployExecutorFixture);
 
     // Deploy the measurement harness that replicates the batch execution loop body.
@@ -1511,11 +1511,11 @@ describe("Tangem7702GaslessExecutor", function () {
 
     // Per-iteration gas includes: loop body overhead + gas consumed by receive() inside subcall.
     // receive() consumes ~16 gas inside the subcall (covered by totalGasLimit in real usage).
-    // The _batchCallOverhead constant (1200) covers the overhead portion alone.
+    // The BATCH_LOOP_OVERHEAD constant (1200) covers the overhead portion alone.
     // Expected measurement: ~1216 gas (1200 overhead + ~16 receive() body).
     const perIteration = totalLoopGas / iterations;
 
-    // Assert the measured per-iteration cost is in a valid range around _batchCallOverhead (1200).
+    // Assert the measured per-iteration cost is in a valid range around BATCH_LOOP_OVERHEAD (1200).
     // Lower bound: overhead shouldn't drop below 1100 without a code change needing review.
     // Upper bound: overhead + minimal subcall cost shouldn't exceed 1300.
     expect(perIteration).to.be.greaterThanOrEqual(1100n);

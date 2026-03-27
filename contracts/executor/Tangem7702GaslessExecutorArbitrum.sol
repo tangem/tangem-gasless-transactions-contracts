@@ -26,9 +26,4 @@ contract Tangem7702GaslessExecutorArbitrum is
     function _baseGasAfterCall() internal pure override returns (uint256) {
         return 8000; // Precompile is very cheap (~200 gas)
     }
-
-    /// @inheritdoc Tangem7702GaslessExecutor
-    function _batchCallOverhead() internal pure override returns (uint256) {
-        return 1200; // Measured ~1085 gas/iteration via gasleft() instrumentation + 10% margin
-    }
 }

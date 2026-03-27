@@ -19,6 +19,23 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
     ///      Using 1e18 keeps the math consistent with ETH-denominated gas costs.
     uint256 private constant PRICE_PRECISION = 1 ether;
 
+    /// @notice Per-iteration loop body overhead for batch execution.
+    /// @dev Covers: stack manipulation, counter increment, conditional jumps,
+    ///      memory operations, and warm CALL opcode base cost (100 gas).
+    ///      Measured ~1085 gas/iteration via gasleft() instrumentation + ~10% margin.
+    uint256 private constant BATCH_LOOP_OVERHEAD = 1200;
+
+    /// @notice Additional gas the EVM charges the caller for a CALL to a cold address.
+    /// @dev CALL to a cold address costs 2600 gas vs 100 for warm (EIP-2929).
+    ///      We pessimistically treat every batch target as cold, because on-chain
+    ///      there is no way to know the access-list state ahead of execution.
+    uint256 private constant COLD_ADDRESS_SURCHARGE = 2500;
+
+    /// @notice Additional gas the EVM charges the caller when CALL transfers non-zero value.
+    /// @dev positive_value_cost per the Yellow Paper; charged to the caller's budget,
+    ///      NOT deducted from the forwarded gas limit.
+    uint256 private constant POSITIVE_VALUE_COST = 9000;
+
     // EIP-712 types
     string private constant GASLESS_TRANSACTION_TYPE =
         "GaslessTransaction(Transaction transaction,Fee fee,uint256 nonce)";
@@ -126,12 +143,18 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
         require(txs.length >= 2, InvalidCallsLength());
 
         uint256 totalGasLimit = 0;
+        uint256 totalCallOverhead = 0;
+        uint256 perCallBase = BATCH_LOOP_OVERHEAD + COLD_ADDRESS_SURCHARGE;
         for (uint256 i = 0; i < txs.length; ) {
             Transaction calldata transaction = txs[i];
 
             require(transaction.to != address(0), ZeroTarget());
 
             totalGasLimit += transaction.gasLimit;
+            totalCallOverhead += perCallBase;
+            if (transaction.value > 0) {
+                totalCallOverhead += POSITIVE_VALUE_COST;
+            }
             unchecked {
                 ++i;
             }
@@ -139,7 +162,7 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
 
         _verifyGaslessBatchTransaction(gaslessTx, signature);
 
-        uint256 reservedBase = _reservedPostCallGas(gaslessTx.fee) + _batchCallOverhead() * txs.length;
+        uint256 reservedBase = _reservedPostCallGas(gaslessTx.fee) + totalCallOverhead;
         require(gasleft() >= totalGasLimit + reservedBase, InsufficientGas());
 
         uint256 executedCalls = 0;
@@ -408,14 +431,6 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
     ///      to account for chain-specific oracle costs.
     /// @return Gas units to reserve for post-call operations.
     function _baseGasAfterCall() internal view virtual returns (uint256);
-
-    /// @notice Per-call gas overhead for batch execution loop iterations.
-    /// @dev Accounts for loop body overhead beyond the user-specified `gasLimit` for each call:
-    ///      CALL opcode base cost (100 warm), calldata copy, success check, counter update, jump.
-    ///      Measured via gasleft() instrumentation: ~1085 gas/iteration. Value 1200 includes ~10% margin.
-    ///      Multiplied by `transactions.length` in `executeBatchTransaction` to compute total batch reserve.
-    /// @return Gas units to reserve per call in a batch.
-    function _batchCallOverhead() internal view virtual returns (uint256);
 
     function supportsInterface(bytes4 interfaceId) 
         public 
