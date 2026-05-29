@@ -2,7 +2,7 @@ import hardhatToolboxMochaEthers from "@nomicfoundation/hardhat-toolbox-mocha-et
 import { task } from "hardhat/config";
 import "dotenv/config";
 
-const { MNEMONIC, ETHEREUM_RPC_URL, POLYGON_RPC_URL, BSC_RPC_URL, ARBITRUM_RPC_URL, BASE_RPC_URL, API_KEY } = process.env;
+const { MNEMONIC, ETHEREUM_RPC_URL, POLYGON_RPC_URL, BSC_RPC_URL, ARBITRUM_RPC_URL, BASE_RPC_URL, ETHERSCAN_API_KEY } = process.env;
 const ACCOUNTS = MNEMONIC ? { mnemonic: MNEMONIC, "initialIndex": 0 } : "remote";
 
 const deploy = task(
@@ -64,8 +64,10 @@ export default {
       accounts: ACCOUNTS
     },
   },
-  etherscan: {
-    apiKey: API_KEY,
+  verify: {
+    etherscan: {
+      apiKey: ETHERSCAN_API_KEY,
+    },
   },
   tasks: [deploy]
 };
