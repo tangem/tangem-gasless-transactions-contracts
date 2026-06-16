@@ -10,6 +10,8 @@ export default async function (
 ) {
   const { ethers } = await hre.network.connect();
 
+  await hre.tasks.getTask("compile").run({});
+
   let Tangem7702GaslessExecutor;
   if (taskArguments.type == "L1") {
     Tangem7702GaslessExecutor = await ethers.getContractFactory("Tangem7702GaslessExecutorL1");
