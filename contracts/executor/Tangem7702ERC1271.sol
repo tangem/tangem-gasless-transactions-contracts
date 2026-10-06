@@ -1,25 +1,21 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.33;
 
-import {SignerERC7702} from "@openzeppelin/contracts/utils/cryptography/signers/SignerERC7702.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {IERC1271} from "@openzeppelin/contracts/interfaces/IERC1271.sol";
 
-abstract contract Tangem7702ERC1271 is IERC1271, SignerERC7702 {
+abstract contract Tangem7702ERC1271 is IERC1271 {
+    /// @dev The magic value returned when the signature is invalid (ERC-1271)
     bytes4 private constant _INVALID_SIGNATURE = 0xffffffff;
 
+    /// @inheritdoc IERC1271
+    /// @dev Accepts both 65-byte and 64-byte (ERC-2098) encodings of the same signature
     function isValidSignature(bytes32 hash, bytes calldata signature) external view returns (bytes4) {
-        return _rawSignatureValidation(hash, signature) ? IERC1271.isValidSignature.selector : _INVALID_SIGNATURE;
-    }
+        (uint8 v, bytes32 r, bytes32 s) = ECDSA.parseCalldata(signature);
+        (address recovered, ECDSA.RecoverError err,) = ECDSA.tryRecover(hash, v, r, s);
 
-    function _rawSignatureValidation(bytes32 hash, bytes calldata signature) internal view override returns (bool) {
-        if (signature.length == 64) {
-            (address recovered, ECDSA.RecoverError err,) =
-                ECDSA.tryRecover(hash, bytes32(signature[0:32]), bytes32(signature[32:64]));
-
-            return address(this) == recovered && err == ECDSA.RecoverError.NoError;
-        }
-
-        return super._rawSignatureValidation(hash, signature);
+        return recovered == address(this) && err == ECDSA.RecoverError.NoError
+            ? IERC1271.isValidSignature.selector
+            : _INVALID_SIGNATURE;
     }
 }
