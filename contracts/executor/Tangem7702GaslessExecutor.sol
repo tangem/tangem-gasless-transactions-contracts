@@ -9,7 +9,7 @@ import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 import {ITangem7702GaslessExecutor} from "../interfaces/ITangem7702GaslessExecutor.sol";
-import {Tangem7702ERC1271} from "./Tangem7702ERC1271.sol";
+import {Tangem7702ERC1271, IERC1271} from "./Tangem7702ERC1271.sol";
 
 // layout should be at keccak256(abi.encode(uint256(keccak256(bytes(tangem.storage.Tangem7702GaslessExecutor))) - 1)) & ~bytes32(uint256(0xff))
 abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Holder, ITangem7702GaslessExecutor, Tangem7702ERC1271 {
@@ -441,6 +441,7 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
         returns (bool) 
     {
         return interfaceId == type(IERC721Receiver).interfaceId ||
+               interfaceId == type(IERC1271).interfaceId ||
                super.supportsInterface(interfaceId);
     }
 }
