@@ -5,6 +5,9 @@ import { makeGaslessTx, makeGaslessBatchTx, signGaslessTx, signGaslessBatchTx } 
 const conn = await hre.network.connect();
 const { ethers, networkHelpers } = conn;
 
+const ERC1271_MAGIC_VALUE = "0x1626ba7e";
+const ERC1271_INVALID_SIGNATURE = "0xffffffff";
+
 async function installExecutorCodeAtEoa({ executorEoaAddress, implementationAddress }) {
   // Read the deployed implementation runtime bytecode from the chain.
   const implCode = await ethers.provider.getCode(implementationAddress);
@@ -62,6 +65,65 @@ async function deployExecutorFixture() {
     token,
     target,
   };
+}
+
+function rawSignature(r, s, v) {
+  return ethers.solidityPacked(["uint256", "uint256", "uint8"], [r, s, v]);
+}
+
+async function ecrecoverPrecompile(hash, v, r, s) {
+  // Query the raw ecrecover precompile, bypassing OpenZeppelin checks (v range, low-s).
+  const ecrecoverPrecompileAddress = "0x0000000000000000000000000000000000000001";
+  const result = await ethers.provider.call({
+    to: ecrecoverPrecompileAddress,
+    data: ethers.AbiCoder.defaultAbiCoder().encode(
+      ["bytes32", "uint8", "uint256", "uint256"],
+      [hash, v, r, s]
+    ),
+  });
+
+  // The precompile returns empty data when recovery fails.
+  return result === "0x" ? ethers.ZeroAddress : ethers.getAddress(ethers.dataSlice(result, 12));
+}
+
+function signBothParities(signingKey) {
+  // Signatures are deterministic, so sign distinct hashes until both y-parity values are covered.
+  const byParity = {};
+  for (let i = 0; Object.keys(byParity).length < 2; i++) {
+    const hash = ethers.id(`Tangem7702ERC1271 parity hash ${i}`);
+    const signature = signingKey.sign(hash);
+    byParity[signature.yParity] ??= { hash, signature };
+  }
+  return [byParity[0], byParity[1]];
+}
+
+async function deployErc1271Fixture() {
+  const [deployer] = await ethers.getSigners();
+
+  const ExecutorImpl = await ethers.getContractFactory("Tangem7702GaslessExecutorL1", deployer);
+  const impl = await ExecutorImpl.deploy();
+  await impl.waitForDeployment();
+
+  // Use a known key so tests can sign raw hashes, and install the executor code at its address.
+  const signingKey = new ethers.SigningKey(ethers.id("erc1271 executor eoa"));
+  const executorAddress = ethers.computeAddress(signingKey);
+  await installExecutorCodeAtEoa({
+    executorEoaAddress: executorAddress,
+    implementationAddress: await impl.getAddress(),
+  });
+  const executor = await ethers.getContractAt("Tangem7702GaslessExecutor", executorAddress);
+
+  // Raw 32-byte hash signed without the EIP-191 prefix, as ERC-1271 callers pass it through as-is.
+  const hash = ethers.id("Tangem7702ERC1271 test hash");
+  const signature = signingKey.sign(hash);
+  const signaturesByParity = signBothParities(signingKey);
+
+  // Deploy a caller that validates signatures through OpenZeppelin SignatureChecker.
+  const Checker = await ethers.getContractFactory("SignatureCheckerMock", deployer);
+  const checker = await Checker.deploy();
+  await checker.waitForDeployment();
+
+  return { impl, executor, executorAddress, signingKey, hash, signature, signaturesByParity, checker };
 }
 
 describe("Tangem7702GaslessExecutor", function () {
@@ -1460,7 +1522,7 @@ describe("Tangem7702GaslessExecutor", function () {
     expect(await executor.nonce()).to.equal(1n);
   });
 
-  it("Supports ERC165, ERC721Receiver, and ERC1155Receiver interfaces", async function () {
+  it("Supports ERC165, ERC721Receiver, ERC1155Receiver, and ERC1271 interfaces", async function () {
     // Load fresh fixture state for this test.
     const { executor } = await networkHelpers.loadFixture(deployExecutorFixture);
 
@@ -1472,6 +1534,9 @@ describe("Tangem7702GaslessExecutor", function () {
 
     // IERC1155Receiver interface ID (onERC1155Received + onERC1155BatchReceived).
     expect(await executor.supportsInterface("0x4e2312e0")).to.equal(true);
+
+    // IERC1271 interface ID (isValidSignature).
+    expect(await executor.supportsInterface("0x1626ba7e")).to.equal(true);
 
     // Invalid interface ID must not be supported.
     expect(await executor.supportsInterface("0xffffffff")).to.equal(false);
@@ -1520,5 +1585,173 @@ describe("Tangem7702GaslessExecutor", function () {
     // Upper bound: overhead + minimal subcall cost shouldn't exceed 1300.
     expect(perIteration).to.be.greaterThanOrEqual(1100n);
     expect(perIteration).to.be.lessThanOrEqual(1300n);
+  });
+
+  describe("ERC-1271 isValidSignature", function () {
+    it("Returns magic value for a valid 65-byte signature by the executor EOA", async function () {
+      const { executor, hash, signature } = await networkHelpers.loadFixture(deployErc1271Fixture);
+
+      expect(await executor.isValidSignature(hash, signature.serialized)).to.equal(ERC1271_MAGIC_VALUE);
+    });
+
+    it("Returns invalid value without reverting for a signature by another key", async function () {
+      const { executor, hash } = await networkHelpers.loadFixture(deployErc1271Fixture);
+
+      const otherKey = new ethers.SigningKey(ethers.id("another signer"));
+      const otherSignature = otherKey.sign(hash);
+
+      expect(await executor.isValidSignature(hash, otherSignature.serialized)).to.equal(ERC1271_INVALID_SIGNATURE);
+    });
+
+    it("Returns magic value for the 64-byte ERC-2098 compact form of a valid signature", async function () {
+      const { executor, signaturesByParity } = await networkHelpers.loadFixture(deployErc1271Fixture);
+
+      // Compact form is r || yParityAndS; acceptance of it is a deliberate part of the client contract.
+      for (const { hash, signature } of signaturesByParity) {
+        const compact = signature.compactSerialized;
+        expect(ethers.dataLength(compact)).to.equal(64);
+
+        expect(await executor.isValidSignature(hash, compact), `yParity = ${signature.yParity}`)
+          .to.equal(ERC1271_MAGIC_VALUE);
+      }
+    });
+
+    it("Returns invalid value for a 64-byte signature with the parity bit flipped", async function () {
+      const { executor, signaturesByParity } = await networkHelpers.loadFixture(deployErc1271Fixture);
+
+      for (const { hash, signature } of signaturesByParity) {
+        // The top bit of vs encodes y-parity; the wrong parity recovers to a different address.
+        const flipped = ethers.getBytes(signature.compactSerialized);
+        flipped[32] ^= 0x80;
+
+        expect(await executor.isValidSignature(hash, flipped), `yParity = ${signature.yParity}`)
+          .to.equal(ERC1271_INVALID_SIGNATURE);
+      }
+    });
+
+    it("Returns invalid value for the high-s form of a valid signature", async function () {
+      const { executor, executorAddress, hash, signature } = await networkHelpers.loadFixture(deployErc1271Fixture);
+
+      const secp256k1Order = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
+      const highS = secp256k1Order - BigInt(signature.s);
+      const flippedV = signature.v === 27 ? 28 : 27;
+
+      // The high-s signature still recovers to the executor at the precompile level,
+      // so only the low-s check can reject it.
+      expect(await ecrecoverPrecompile(hash, flippedV, signature.r, highS)).to.equal(executorAddress);
+
+      expect(await executor.isValidSignature(hash, rawSignature(signature.r, highS, flippedV)))
+        .to.equal(ERC1271_INVALID_SIGNATURE);
+    });
+
+    it("Returns invalid value without reverting for unsupported signature lengths", async function () {
+      const { executor, hash, signature } = await networkHelpers.loadFixture(deployErc1271Fixture);
+
+      const valid = signature.serialized;
+      const malformed = {
+        0: "0x",
+        63: ethers.dataSlice(valid, 0, 63),
+        66: ethers.concat([valid, "0x00"]),
+        130: ethers.concat([valid, valid]),
+      };
+
+      for (const [length, sig] of Object.entries(malformed)) {
+        expect(ethers.dataLength(sig)).to.equal(Number(length));
+        expect(await executor.isValidSignature(hash, sig), `length ${length}`).to.equal(ERC1271_INVALID_SIGNATURE);
+      }
+    });
+
+    it("Returns invalid value for a 65-byte signature with v outside {27, 28}", async function () {
+      const { executor, hash, signature } = await networkHelpers.loadFixture(deployErc1271Fixture);
+
+      // Clients must encode v as 27/28; raw y-parity (0/1) and other values are rejected.
+      for (const v of [0, 1, 29]) {
+        expect(
+          await executor.isValidSignature(hash, rawSignature(signature.r, signature.s, v)),
+          `v = ${v}`
+        ).to.equal(ERC1271_INVALID_SIGNATURE);
+      }
+    });
+
+    it("Returns invalid value for signatures that recover to the zero address", async function () {
+      const { executor, hash, signature } = await networkHelpers.loadFixture(deployErc1271Fixture);
+
+      const zeroRecoveryCases = [
+        { r: 0n, s: signature.s, v: signature.v },
+        { r: 0n, s: 0n, v: 27 },
+      ];
+
+      for (const { r, s, v } of zeroRecoveryCases) {
+        // Confirm the precompile yields address(0) for this input.
+        expect(await ecrecoverPrecompile(hash, v, r, s)).to.equal(ethers.ZeroAddress);
+
+        expect(await executor.isValidSignature(hash, rawSignature(r, s, v))).to.equal(ERC1271_INVALID_SIGNATURE);
+      }
+    });
+
+    it("Returns invalid value on the implementation contract without delegation", async function () {
+      const { impl, hash, signature } = await networkHelpers.loadFixture(deployErc1271Fixture);
+
+      // On the implementation, address(this) is the contract itself, which has no key.
+      expect(await impl.isValidSignature(hash, signature.serialized)).to.equal(ERC1271_INVALID_SIGNATURE);
+      expect(await impl.isValidSignature(hash, signature.compactSerialized)).to.equal(ERC1271_INVALID_SIGNATURE);
+    });
+
+    it("Returns invalid value for a signature over a different hash", async function () {
+      const { executor, signingKey, hash } = await networkHelpers.loadFixture(deployErc1271Fixture);
+
+      const otherHashSignature = signingKey.sign(ethers.id("different hash"));
+
+      expect(await executor.isValidSignature(hash, otherHashSignature.serialized)).to.equal(ERC1271_INVALID_SIGNATURE);
+    });
+
+    it("Validates 65-byte and 64-byte signatures through SignatureChecker for the delegated EOA", async function () {
+      const { checker, executorAddress, signaturesByParity } = await networkHelpers.loadFixture(deployErc1271Fixture);
+
+      // Non-empty code routes SignatureChecker to the ERC-1271 branch.
+      expect(await ethers.provider.getCode(executorAddress)).to.not.equal("0x");
+
+      for (const { hash, signature } of signaturesByParity) {
+        const parity = `yParity = ${signature.yParity}`;
+        expect(await checker.isValidSignatureNow(executorAddress, hash, signature.serialized), parity).to.equal(true);
+        expect(await checker.isValidSignatureNow(executorAddress, hash, signature.compactSerialized), parity)
+          .to.equal(true);
+      }
+    });
+
+    it("Rejects 64-byte signatures through SignatureChecker for a plain EOA without code", async function () {
+      const { checker, hash } = await networkHelpers.loadFixture(deployErc1271Fixture);
+
+      // Control case: the ECDSA branch accepts only 65-byte signatures, so a passing 64-byte check
+      // for the delegated EOA can only come from the ERC-1271 path.
+      const plainKey = new ethers.SigningKey(ethers.id("plain eoa"));
+      const plainAddress = ethers.computeAddress(plainKey.publicKey);
+      const plainSignature = plainKey.sign(hash);
+
+      expect(await ethers.provider.getCode(plainAddress)).to.equal("0x");
+      expect(await checker.isValidSignatureNow(plainAddress, hash, plainSignature.serialized)).to.equal(true);
+      expect(await checker.isValidSignatureNow(plainAddress, hash, plainSignature.compactSerialized)).to.equal(false);
+    });
+
+    it("Rejects a signature by another key through SignatureChecker for the delegated EOA", async function () {
+      const { checker, executorAddress, hash } = await networkHelpers.loadFixture(deployErc1271Fixture);
+
+      const otherSignature = new ethers.SigningKey(ethers.id("another signer")).sign(hash);
+
+      expect(await checker.isValidSignatureNow(executorAddress, hash, otherSignature.serialized))
+        .to.equal(false);
+    });
+
+    it("Succeeds with empty returndata for the legacy isValidSignature(bytes,bytes) selector", async function () {
+      const { executor, hash, signature } = await networkHelpers.loadFixture(deployErc1271Fixture);
+
+      const legacy = new ethers.Interface(["function isValidSignature(bytes data, bytes signature) view returns (bytes4)"]);
+      const data = legacy.encodeFunctionData("isValidSignature", [hash, signature.serialized]);
+      expect(data.slice(0, 10)).to.equal("0x20c13b0b");
+
+      // The call lands in the empty payable fallback: it does not revert and returns no data,
+      // so callers that decode the response treat the signature as invalid.
+      expect(await ethers.provider.call({ to: await executor.getAddress(), data })).to.equal("0x");
+    });
   });
 });
