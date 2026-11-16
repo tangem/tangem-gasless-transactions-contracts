@@ -9,10 +9,20 @@ import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 import {ITangem7702GaslessExecutor} from "../interfaces/ITangem7702GaslessExecutor.sol";
+import {GasOverhead} from "./GasOverhead.sol";
 import {Tangem7702ERC1271, IERC1271} from "./Tangem7702ERC1271.sol";
 
-// layout should be at keccak256(abi.encode(uint256(keccak256(bytes(tangem.storage.Tangem7702GaslessExecutor))) - 1)) & ~bytes32(uint256(0xff))
-abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Holder, ITangem7702GaslessExecutor, Tangem7702ERC1271 {
+/// @title Tangem 7702 Gasless Executor
+// layout at keccak256(abi.encode(uint256(keccak256(bytes(tangem.storage.Tangem7702GaslessExecutor))) - 1)) & ~bytes32(uint256(0xff))
+contract Tangem7702GaslessExecutor is
+    EIP712,
+    ERC721Holder,
+    ERC1155Holder,
+    GasOverhead,
+    ITangem7702GaslessExecutor,
+    Tangem7702ERC1271
+    layout at 0x63126cb0ee213fd665c396acd692b9c0a13c8cc8bbd732af4f146bb546be9800
+{
     using SafeERC20 for IERC20;
 
     /// @notice Fixed-point precision used for `coinPriceInToken` calculations.
@@ -60,11 +70,16 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
     /// @inheritdoc ITangem7702GaslessExecutor
     uint256 public nonce;
 
-    /// @notice Initializes the EIP-712 domain used to verify `GaslessTransaction` signatures.
+    /// @notice Initializes the EIP-712 domain and gas accounting.
     /// @dev Sets the EIP-712 domain name to "Tangem7702GaslessExecutor" and version to "1".
     ///      These values are part of the signed domain separator, so changing them breaks
     ///      signature compatibility with existing clients.
-    constructor() EIP712("Tangem7702GaslessExecutor", "1") {}
+    /// @param baseGasAfterCall_ See {BASE_GAS_AFTER_CALL}.
+    /// @param l1FeeMode_ See {L1_FEE_MODE}.
+    constructor(uint256 baseGasAfterCall_, L1FeeMode l1FeeMode_)
+        EIP712("Tangem7702GaslessExecutor", "1")
+        GasOverhead(baseGasAfterCall_, l1FeeMode_)
+    {}
 
     /// @inheritdoc ITangem7702GaslessExecutor
     receive() external payable {}
@@ -328,11 +343,11 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
     }
 
     /// @notice Returns the amount of gas to reserve for post-call operations.
-    /// @dev Always includes `_baseGasAfterCall()`.
+    /// @dev Always includes `BASE_GAS_AFTER_CALL`.
     ///      Includes `feeTransferGasLimit` only when fee is enabled (`coinPriceInToken > 0`),
     ///      because fee processing is skipped otherwise.
     function _reservedPostCallGas(Fee calldata fee) private view returns (uint256 reserved) {
-        reserved = _baseGasAfterCall();
+        reserved = BASE_GAS_AFTER_CALL;
         if (fee.coinPriceInToken > 0) {
             reserved += fee.feeTransferGasLimit;
         }
@@ -434,19 +449,6 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
             }
         }
     }
-
-    /// @notice Returns the L1 data fee in wei for the current transaction.
-    /// @dev Should return 0 on L1 chains. L2 implementations may override to include DA/calldata cost.
-    function _getL1Fee() internal view virtual returns (uint256);
-
-    /// @notice Gas reserved for post-call operations in `executeTransaction`.
-    /// @dev Accounts for gas consumed after the user's call completes, excluding
-    ///      the fee token transfer (covered by `feeTransferGasLimit`). Includes:
-    ///      success/failure handling, event emissions, fee calculations, L1 fee
-    ///      oracle reads, and function overhead. Override in L2 implementations
-    ///      to account for chain-specific oracle costs.
-    /// @return Gas units to reserve for post-call operations.
-    function _baseGasAfterCall() internal view virtual returns (uint256);
 
     function supportsInterface(bytes4 interfaceId) 
         public 
