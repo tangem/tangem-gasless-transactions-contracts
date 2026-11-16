@@ -16,19 +16,19 @@ interface ITangem7702GaslessExecutor {
     }
 
     /// @notice Fee configuration for a gasless execution.
-    /// @dev The fee is paid in `feeToken` and is computed from measured gas usage and `coinPriceInToken`.
+    /// @dev Paid in `feeToken` (native coin or ERC20), computed from measured gas and `coinPriceInToken`.
     struct Fee {
-        /// @notice ERC-20 token used to pay the relayer/service fee.
+        /// @notice ERC-20 fee token, or `address(0)` for native coin.
         address feeToken;
         /// @notice Maximum fee amount (in `feeToken` smallest units) the signer is willing to pay.
         uint256 maxTokenFee;
-        /// @notice Price of 1 native coin (1 ether) expressed in `feeToken` smallest units.
+        /// @notice Price of 1 ether in `feeToken` smallest units (`1e18` for native coin, 0 disables the fee).
         uint256 coinPriceInToken;
         /// @notice Gas limit budget allocated for the fee token transfer.
         uint256 feeTransferGasLimit;
         /// @notice Fixed gas overhead added to the measured gas for fee calculation.
         uint256 baseGas;
-        /// @notice The recipient of the fee. Added to signature to discourage front-running
+        /// @notice Fee recipient, signed to prevent front-running. Must be non-zero for native coin when fee is enabled.
         address feeReceiver;
     }
 
@@ -56,7 +56,7 @@ interface ITangem7702GaslessExecutor {
 
     /// @notice Thrown when the executor account does not have enough `feeToken` balance for `maxTokenFee`.
     /// @dev Enforced during fee processing (after user call(s)), enabling “top-up then pay fee” flows.
-    /// @param feeToken The ERC-20 fee token address.
+    /// @param feeToken Fee token, or `address(0)` for native coin.
     /// @param balance Current `feeToken` balance of the executor account.
     /// @param fee Calculated token fee.
     error InsufficientFundsForFee(address feeToken, uint256 balance, uint256 fee);
@@ -114,6 +114,17 @@ interface ITangem7702GaslessExecutor {
     /// @param selector Function selector extracted from calldata (or 0 if unavailable).
     error BatchExecutionFailedNotForced(uint256 index, address to, uint256 value, bytes4 selector);
 
+    /// @notice Thrown when the native coin fee transfer fails.
+    /// @dev Not softened by `forced`.
+    /// @param feeReceiver Fee recipient the transfer was sent to.
+    /// @param feeAmount Fee amount in wei.
+    error NativeFeeTransferFailed(address feeReceiver, uint256 feeAmount);
+
+    /// @notice Thrown when a native coin fee is sent to the zero address.
+    /// @dev Checked only for native coin, where a transfer to `address(0)` succeeds and burns the fee.
+    ///      ERC-20 fee tokens are expected to reject a zero receiver themselves. Not softened by `forced`.
+    error ZeroFeeReceiver();
+
     /// @notice Emitted after a gasless transaction is executed (and fee processing, if enabled, completes).
     /// @dev If `forced=true`, the target call may have failed; such failures are indicated via {ExecutionFailed}.
     /// @param executor The executing account (EIP-7702 delegating account), i.e., `address(this)` in delegated context.
@@ -147,7 +158,7 @@ interface ITangem7702GaslessExecutor {
     /// @notice Emitted after the fee token transfer is processed.
     /// @dev `totalGas` is the gas amount used for fee calculation (measured + overheads).
     /// @param feeReceiver Address receiving the fee.
-    /// @param feeToken ERC-20 token used for the fee payment.
+    /// @param feeToken Fee token, or `address(0)` for native coin.
     /// @param feeAmount Actual fee amount transferred in `feeToken` smallest units.
     /// @param totalGas Total gas amount used to compute the fee.
     /// @param l1Fee L1 data fee added to `weiCost` (0 on L1 chains).
@@ -181,7 +192,7 @@ interface ITangem7702GaslessExecutor {
     ///      accidental transfers/calls in delegated (EIP-7702) context. No state is modified.
     fallback() external payable;
 
-    /// @notice Executes a user-signed gasless transaction and optionally pays a fee in an ERC-20 token.
+    /// @notice Executes a user-signed gasless transaction and optionally pays a fee in an ERC-20 token or native coin.
     /// @dev Must be called in the context of an EIP-7702 delegating account; the recovered signer is required
     ///      to equal `address(this)` in the delegated execution context.
     ///      Verifies `gaslessTx.nonce` and the EIP-712 signature before executing the target call and increments
@@ -202,7 +213,7 @@ interface ITangem7702GaslessExecutor {
     )
         external;
     
-    /// @notice Executes a user-signed batch gasless transaction and optionally pays a fee in an ERC-20 token.
+    /// @notice Executes a user-signed batch gasless transaction and optionally pays a fee in an ERC-20 token or native coin.
     /// @dev The batch stops at the first failure. If `forced` is false, the executor reverts
     ///      (bubbling revert data when available). If `forced` is true, the executor emits
     ///      {BatchCallFailed}, stops processing remaining calls, and then proceeds to fee payment.
