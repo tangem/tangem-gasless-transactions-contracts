@@ -22,6 +22,9 @@ async function installExecutorCodeAtEoa({ executorEoaAddress, implementationAddr
 const ARB_GAS_INFO_ADDRESS = "0x000000000000000000000000000000000000006C";
 const OP_GAS_PRICE_ORACLE_ADDRESS = "0x420000000000000000000000000000000000000F";
 
+// Namespaced storage base from the executor `layout at` specifier.
+const EXECUTOR_STORAGE_BASE = 0x63126cb0ee213fd665c396acd692b9c0a13c8cc8bbd732af4f146bb546be9800n;
+
 async function installMockAt(contractName, address, deployer) {
   const Mock = await ethers.getContractFactory(contractName, deployer);
   const mock = await Mock.deploy();
@@ -45,27 +48,56 @@ function parseFeeTransferProcessed(executor, receipt) {
     .find((p) => p && p.name === "FeeTransferProcessed");
 }
 
+// Mirrors IGasOverhead.L1FeeMode.
+const L1_FEE_MODE = { None: 0, Arbitrum: 1, OpStack: 2 };
+
+const BASE_GAS_AFTER_CALL_DEFAULT = 8000n;
+const BASE_GAS_AFTER_CALL_OP = 18000n;
+
 async function deployExecutorFixture() {
-  return deployExecutor("Tangem7702GaslessExecutorL1", 1);
+  return deployExecutor({
+    executorSignerIndex: 1,
+    baseGasAfterCall: BASE_GAS_AFTER_CALL_DEFAULT,
+    l1FeeMode: L1_FEE_MODE.None,
+  });
 }
 
 // A fixture loaded for the first time runs on top of the previous test's state and setCode keeps
 // account storage, so each executor variant uses its own account to start with a zero nonce.
+// The L1 fee oracle mock is installed before deployment because the constructor probes it.
 async function deployArbitrumExecutorFixture() {
-  const fixture = await deployExecutor("Tangem7702GaslessExecutorArbitrum", 4);
-  const l1FeeOracle = await installMockAt("L1FeeOracleMock", ARB_GAS_INFO_ADDRESS, fixture.deployer);
+  const [deployer] = await ethers.getSigners();
+  const l1FeeOracle = await installMockAt("L1FeeOracleMock", ARB_GAS_INFO_ADDRESS, deployer);
+  const fixture = await deployExecutor({
+    executorSignerIndex: 4,
+    baseGasAfterCall: BASE_GAS_AFTER_CALL_DEFAULT,
+    l1FeeMode: L1_FEE_MODE.Arbitrum,
+  });
 
   return { ...fixture, l1FeeOracle };
 }
 
 async function deployOpExecutorFixture() {
-  const fixture = await deployExecutor("Tangem7702GaslessExecutorOP", 5);
-  const l1FeeOracle = await installMockAt("L1FeeOracleMock", OP_GAS_PRICE_ORACLE_ADDRESS, fixture.deployer);
+  const [deployer] = await ethers.getSigners();
+  const l1FeeOracle = await installMockAt("L1FeeOracleMock", OP_GAS_PRICE_ORACLE_ADDRESS, deployer);
+  const fixture = await deployExecutor({
+    executorSignerIndex: 5,
+    baseGasAfterCall: BASE_GAS_AFTER_CALL_OP,
+    l1FeeMode: L1_FEE_MODE.OpStack,
+  });
 
   return { ...fixture, l1FeeOracle };
 }
 
-async function deployExecutor(implementationName, executorSignerIndex) {
+async function deployHighReserveExecutorFixture() {
+  return deployExecutor({
+    executorSignerIndex: 6,
+    baseGasAfterCall: 3_000_000n,
+    l1FeeMode: L1_FEE_MODE.None,
+  });
+}
+
+async function deployExecutor({ executorSignerIndex, baseGasAfterCall, l1FeeMode }) {
   // Get deterministic test signers: deployer (deploys contracts), executorEOA (acts as delegated account),
   // relayer (external caller), feeReceiver (receives ERC-20 fee).
   const signers = await ethers.getSigners();
@@ -73,8 +105,8 @@ async function deployExecutor(implementationName, executorSignerIndex) {
   const executorEOA = signers[executorSignerIndex];
 
   // Deploy the executor implementation contract (we will copy its runtime code to executorEOA).
-  const ExecutorImpl = await ethers.getContractFactory(implementationName, deployer);
-  const impl = await ExecutorImpl.deploy();
+  const ExecutorImpl = await ethers.getContractFactory("Tangem7702GaslessExecutor", deployer);
+  const impl = await ExecutorImpl.deploy(baseGasAfterCall, l1FeeMode);
 
   // Wait until the deployment transaction is mined and the contract is available.
   await impl.waitForDeployment();
@@ -2132,5 +2164,172 @@ describe("Tangem7702GaslessExecutor", function () {
     expect(l1Fee).to.equal(expectedL1Fee);
     expect(feeAmount).to.equal(totalGas * gasPrice + expectedL1Fee);
     expect((await token.balanceOf(feeReceiver.address)) - receiverBalBefore).to.equal(feeAmount);
+  });
+
+  it("Stores nonce at the namespaced storage slot", async function () {
+    const { executor, token, target, feeReceiver, relayer, executorEOA } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    const gaslessTx = makeGaslessTx({
+      to: await target.getAddress(),
+      value: 0n,
+      data: target.interface.encodeFunctionData("ok", ["0x0b"]),
+      feeToken: await token.getAddress(),
+      maxTokenFee: 0n,
+      coinPriceInToken: 0n,
+      feeTransferGasLimit: 0n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    const { signature } = await signGaslessTx({
+      conn,
+      executorSigner: await ethers.getSigner(executorEOA.address),
+      executorAddress: executorEOA.address,
+      gaslessTx,
+    });
+
+    await executor.connect(relayer).executeTransaction(gaslessTx, signature, false);
+
+    // EIP712 `_nameFallback` and `_versionFallback` occupy the first two slots, `nonce` follows.
+    expect(await executor.nonce()).to.equal(1n);
+    expect(await ethers.provider.getStorage(executorEOA.address, EXECUTOR_STORAGE_BASE + 2n))
+      .to.equal(ethers.toBeHex(1n, 32));
+  });
+
+  it("Reverts deployment with ZeroBaseGasAfterCall when baseGasAfterCall is zero", async function () {
+    const { deployer } = await networkHelpers.loadFixture(deployExecutorFixture);
+    const Executor = await ethers.getContractFactory("Tangem7702GaslessExecutor", deployer);
+
+    await expect(Executor.deploy(0n, L1_FEE_MODE.None))
+      .to.be.revertedWithCustomError(Executor, "ZeroBaseGasAfterCall");
+  });
+
+  it("Reverts deployment with L1FeeOracleNotDeployed when ArbGasInfo has no code", async function () {
+    const { deployer } = await networkHelpers.loadFixture(deployExecutorFixture);
+    const Executor = await ethers.getContractFactory("Tangem7702GaslessExecutor", deployer);
+
+    await networkHelpers.setCode(ARB_GAS_INFO_ADDRESS, "0x");
+
+    await expect(Executor.deploy(BASE_GAS_AFTER_CALL_DEFAULT, L1_FEE_MODE.Arbitrum))
+      .to.be.revertedWithCustomError(Executor, "L1FeeOracleNotDeployed")
+      .withArgs(ARB_GAS_INFO_ADDRESS);
+  });
+
+  it("Reverts deployment with L1FeeOracleNotDeployed when GasPriceOracle has no code", async function () {
+    const { deployer } = await networkHelpers.loadFixture(deployExecutorFixture);
+    const Executor = await ethers.getContractFactory("Tangem7702GaslessExecutor", deployer);
+
+    await networkHelpers.setCode(OP_GAS_PRICE_ORACLE_ADDRESS, "0x");
+
+    await expect(Executor.deploy(BASE_GAS_AFTER_CALL_OP, L1_FEE_MODE.OpStack))
+      .to.be.revertedWithCustomError(Executor, "L1FeeOracleNotDeployed")
+      .withArgs(OP_GAS_PRICE_ORACLE_ADDRESS);
+  });
+
+  it("Reverts deployment when the L1 fee oracle has an unexpected interface", async function () {
+    const { deployer } = await networkHelpers.loadFixture(deployExecutorFixture);
+    const Executor = await ethers.getContractFactory("Tangem7702GaslessExecutor", deployer);
+
+    // ExecutorTargetMock reverts with "FALLBACK" on unknown selectors.
+    await installMockAt("ExecutorTargetMock", ARB_GAS_INFO_ADDRESS, deployer);
+
+    await expect(Executor.deploy(BASE_GAS_AFTER_CALL_DEFAULT, L1_FEE_MODE.Arbitrum))
+      .to.be.revertedWith("FALLBACK");
+  });
+
+  it("Reverts deployment when l1FeeMode is out of range", async function () {
+    const { deployer } = await networkHelpers.loadFixture(deployExecutorFixture);
+    const Executor = await ethers.getContractFactory("Tangem7702GaslessExecutor", deployer);
+
+    await expect(Executor.deploy(BASE_GAS_AFTER_CALL_DEFAULT, 3)).to.be.revert(ethers);
+  });
+
+  it("Exposes constructor parameters on the delegated account", async function () {
+    const l1 = await networkHelpers.loadFixture(deployExecutorFixture);
+    expect(await l1.executor.BASE_GAS_AFTER_CALL()).to.equal(BASE_GAS_AFTER_CALL_DEFAULT);
+    expect(await l1.executor.L1_FEE_MODE()).to.equal(BigInt(L1_FEE_MODE.None));
+
+    const arbitrum = await networkHelpers.loadFixture(deployArbitrumExecutorFixture);
+    expect(await arbitrum.executor.BASE_GAS_AFTER_CALL()).to.equal(BASE_GAS_AFTER_CALL_DEFAULT);
+    expect(await arbitrum.executor.L1_FEE_MODE()).to.equal(BigInt(L1_FEE_MODE.Arbitrum));
+
+    const op = await networkHelpers.loadFixture(deployOpExecutorFixture);
+    expect(await op.executor.BASE_GAS_AFTER_CALL()).to.equal(BASE_GAS_AFTER_CALL_OP);
+    expect(await op.executor.L1_FEE_MODE()).to.equal(BigInt(L1_FEE_MODE.OpStack));
+  });
+
+  it("Reserves BASE_GAS_AFTER_CALL before the call", async function () {
+    const { executor, token, target, feeReceiver, relayer, executorEOA } =
+      await networkHelpers.loadFixture(deployHighReserveExecutorFixture);
+
+    // 100k for the call fits into a 1M outer gas limit only with a small post-call reserve.
+    const gaslessTx = makeGaslessTx({
+      to: await target.getAddress(),
+      value: 0n,
+      gasLimit: 100_000n,
+      data: target.interface.encodeFunctionData("ok", ["0x0c"]),
+      feeToken: await token.getAddress(),
+      maxTokenFee: 0n,
+      coinPriceInToken: 0n,
+      feeTransferGasLimit: 0n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    const { signature } = await signGaslessTx({
+      conn,
+      executorSigner: await ethers.getSigner(executorEOA.address),
+      executorAddress: executorEOA.address,
+      gaslessTx,
+    });
+
+    await expect(
+      executor.connect(relayer).executeTransaction(gaslessTx, signature, false, { gasLimit: 1_000_000n })
+    ).to.be.revertedWithCustomError(executor, "InsufficientGas");
+
+    expect(await executor.nonce()).to.equal(0n);
+  });
+
+  it("Ignores L1 fee oracles when l1FeeMode is None", async function () {
+    const { executor, token, target, feeReceiver, relayer, deployer, executorEOA } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    const arbOracle = await installMockAt("L1FeeOracleMock", ARB_GAS_INFO_ADDRESS, deployer);
+    const opOracle = await installMockAt("L1FeeOracleMock", OP_GAS_PRICE_ORACLE_ADDRESS, deployer);
+    await arbOracle.setL1Fee(1_000_000_000_000n);
+    await opOracle.setL1FeePerByte(1_000_000n);
+
+    const gasPrice = 1_000_000_000n;
+    await token.connect(deployer).mint(executorEOA.address, ethers.parseEther("1"));
+
+    const gaslessTx = makeGaslessTx({
+      to: await target.getAddress(),
+      value: 0n,
+      data: target.interface.encodeFunctionData("ok", ["0x0d"]),
+      feeToken: await token.getAddress(),
+      maxTokenFee: ethers.parseEther("1"),
+      coinPriceInToken: ethers.parseEther("1"),
+      feeTransferGasLimit: 100_000n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    const { signature } = await signGaslessTx({
+      conn,
+      executorSigner: await ethers.getSigner(executorEOA.address),
+      executorAddress: executorEOA.address,
+      gaslessTx,
+    });
+
+    const tx = await executor.connect(relayer).executeTransaction(gaslessTx, signature, false, { gasPrice });
+    const feeLog = parseFeeTransferProcessed(executor, await tx.wait());
+
+    expect(feeLog).to.not.equal(undefined);
+    expect(feeLog.args.l1Fee).to.equal(0n);
+    expect(feeLog.args.feeAmount).to.equal(feeLog.args.totalGas * gasPrice);
   });
 });
