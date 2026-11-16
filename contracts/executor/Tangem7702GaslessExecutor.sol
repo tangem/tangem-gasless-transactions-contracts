@@ -221,6 +221,7 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
     ///      Strict invariants (NEVER softened by `forced`):
     ///      - `feeAmount <= fee.maxTokenFee`
     ///      - `balance(feeToken) >= feeAmount`
+    ///      - the fee transfer succeeds (and `feeReceiver != address(0)` for native coin)
     ///
     ///      Softened only when `forced=true`:
     ///      - exceeding `feeTransferGasLimit` emits {FeeTransferGasLimitExceeded} instead of reverting.
@@ -248,13 +249,10 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
 
         uint256 gasBeforeTransfer = gasleft();
 
-        uint256 balance = IERC20(fee.feeToken).balanceOf(address(this));
-        require(
-            balance >= feeAmount,
-            InsufficientFundsForFee(fee.feeToken, balance, feeAmount)
-        );
+        uint256 balance = _balanceOf(fee.feeToken);
+        require(balance >= feeAmount, InsufficientFundsForFee(fee.feeToken, balance, feeAmount));
 
-        IERC20(fee.feeToken).safeTransfer(fee.feeReceiver, feeAmount);
+        _feeTransfer(fee.feeToken, fee.feeReceiver, feeAmount);
 
         uint256 gasAfterTransfer = gasleft();
         uint256 feeTransferGasUsed = gasBeforeTransfer - gasAfterTransfer;
@@ -272,6 +270,18 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
         }
 
         emit FeeTransferProcessed(fee.feeReceiver, fee.feeToken, feeAmount, totalGas, l1Fee);
+    }
+
+    /// @notice Sends the fee to `feeReceiver` in `feeToken`.
+    function _feeTransfer(address feeToken, address feeReceiver, uint256 feeAmount) private {
+        if (feeToken == address(0)) {
+            require(feeReceiver != address(0), ZeroFeeReceiver());
+
+            (bool success,) = feeReceiver.call{value: feeAmount}("");
+            require(success, NativeFeeTransferFailed(feeReceiver, feeAmount));
+        } else {
+            IERC20(feeToken).safeTransfer(feeReceiver, feeAmount);
+        }
     }
 
     /// @notice Verifies a gasless transaction EIP-712 signature and consumes the nonce.
@@ -326,6 +336,11 @@ abstract contract Tangem7702GaslessExecutor is EIP712, ERC721Holder, ERC1155Hold
         if (fee.coinPriceInToken > 0) {
             reserved += fee.feeTransferGasLimit;
         }
+    }
+
+    /// @notice Returns the executor balance of `token`, or native coin balance.
+    function _balanceOf(address token) private view returns (uint256) {
+        return token == address(0) ? address(this).balance : IERC20(token).balanceOf(address(this));
     }
 
     /// @notice Computes the EIP-712 struct hash for a `Transaction`.
