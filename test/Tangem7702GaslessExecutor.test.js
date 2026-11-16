@@ -19,13 +19,61 @@ async function installExecutorCodeAtEoa({ executorEoaAddress, implementationAddr
   expect(await ethers.provider.getCode(executorEoaAddress)).to.equal(implCode);
 }
 
+const ARB_GAS_INFO_ADDRESS = "0x000000000000000000000000000000000000006C";
+const OP_GAS_PRICE_ORACLE_ADDRESS = "0x420000000000000000000000000000000000000F";
+
+async function installMockAt(contractName, address, deployer) {
+  const Mock = await ethers.getContractFactory(contractName, deployer);
+  const mock = await Mock.deploy();
+  await mock.waitForDeployment();
+
+  // Storage is not copied, so the mock at `address` starts with zeroed state.
+  await networkHelpers.setCode(address, await ethers.provider.getCode(await mock.getAddress()));
+
+  return ethers.getContractAt(contractName, address);
+}
+
+function parseFeeTransferProcessed(executor, receipt) {
+  return receipt.logs
+    .map((l) => {
+      try {
+        return executor.interface.parseLog(l);
+      } catch {
+        return null;
+      }
+    })
+    .find((p) => p && p.name === "FeeTransferProcessed");
+}
+
 async function deployExecutorFixture() {
+  return deployExecutor("Tangem7702GaslessExecutorL1", 1);
+}
+
+// A fixture loaded for the first time runs on top of the previous test's state and setCode keeps
+// account storage, so each executor variant uses its own account to start with a zero nonce.
+async function deployArbitrumExecutorFixture() {
+  const fixture = await deployExecutor("Tangem7702GaslessExecutorArbitrum", 4);
+  const l1FeeOracle = await installMockAt("L1FeeOracleMock", ARB_GAS_INFO_ADDRESS, fixture.deployer);
+
+  return { ...fixture, l1FeeOracle };
+}
+
+async function deployOpExecutorFixture() {
+  const fixture = await deployExecutor("Tangem7702GaslessExecutorOP", 5);
+  const l1FeeOracle = await installMockAt("L1FeeOracleMock", OP_GAS_PRICE_ORACLE_ADDRESS, fixture.deployer);
+
+  return { ...fixture, l1FeeOracle };
+}
+
+async function deployExecutor(implementationName, executorSignerIndex) {
   // Get deterministic test signers: deployer (deploys contracts), executorEOA (acts as delegated account),
   // relayer (external caller), feeReceiver (receives ERC-20 fee).
-  const [deployer, executorEOA, relayer, feeReceiver] = await ethers.getSigners();
+  const signers = await ethers.getSigners();
+  const [deployer, , relayer, feeReceiver] = signers;
+  const executorEOA = signers[executorSignerIndex];
 
   // Deploy the executor implementation contract (we will copy its runtime code to executorEOA).
-  const ExecutorImpl = await ethers.getContractFactory("Tangem7702GaslessExecutorL1", deployer);
+  const ExecutorImpl = await ethers.getContractFactory(implementationName, deployer);
   const impl = await ExecutorImpl.deploy();
 
   // Wait until the deployment transaction is mined and the contract is available.
@@ -1543,6 +1591,11 @@ describe("Tangem7702GaslessExecutor", function () {
   });
 
   it("Batch execution loop overhead per iteration is below BATCH_LOOP_OVERHEAD (1200 gas)", async function () {
+    // Coverage instrumentation adds a hit call before every statement, inflating the measured gas.
+    if (hre.globalOptions.coverage) {
+      this.skip();
+    }
+
     const { deployer, target } = await networkHelpers.loadFixture(deployExecutorFixture);
 
     // Deploy the measurement harness that replicates the batch execution loop body.
@@ -1753,5 +1806,331 @@ describe("Tangem7702GaslessExecutor", function () {
       // so callers that decode the response treat the signature as invalid.
       expect(await ethers.provider.call({ to: await executor.getAddress(), data })).to.equal("0x");
     });
+  });
+
+  it("Processes native coin fee transfer when feeToken is zero address", async function () {
+    const { executor, target, feeReceiver, relayer, executorEOA } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    const gasPrice = 1_000_000_000n;
+
+    // coinPriceInToken == 1e18 prices the fee 1:1 in wei.
+    const gaslessTx = makeGaslessTx({
+      to: await target.getAddress(),
+      value: 0n,
+      data: target.interface.encodeFunctionData("ok", ["0x05"]),
+      feeToken: ethers.ZeroAddress,
+      maxTokenFee: ethers.parseEther("1"),
+      coinPriceInToken: ethers.parseEther("1"),
+      feeTransferGasLimit: 100_000n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    const { signature } = await signGaslessTx({
+      conn,
+      executorSigner: await ethers.getSigner(executorEOA.address),
+      executorAddress: executorEOA.address,
+      gaslessTx,
+    });
+
+    // The relayer pays the outer tx gas, so executor and receiver balances move only by the fee.
+    const executorBalBefore = await ethers.provider.getBalance(executorEOA.address);
+    const receiverBalBefore = await ethers.provider.getBalance(feeReceiver.address);
+
+    // Set explicit outer gas limit to avoid Hardhat auto-estimation overshooting provider cap.
+    const tx = await executor
+      .connect(relayer)
+      .executeTransaction(gaslessTx, signature, false, { gasPrice, gasLimit: 5_000_000n });
+
+    await expect(tx).to.not.emit(executor, "FeeTransferGasLimitExceeded");
+
+    const feeLog = parseFeeTransferProcessed(executor, await tx.wait());
+
+    expect(feeLog).to.not.equal(undefined);
+
+    const { feeAmount, totalGas, l1Fee } = feeLog.args;
+
+    expect(feeLog.args.feeReceiver).to.equal(feeReceiver.address);
+    expect(feeLog.args.feeToken).to.equal(ethers.ZeroAddress);
+    expect(feeAmount).to.be.greaterThan(0n);
+    expect(feeAmount).to.equal(totalGas * gasPrice + l1Fee);
+
+    const executorBalAfter = await ethers.provider.getBalance(executorEOA.address);
+    const receiverBalAfter = await ethers.provider.getBalance(feeReceiver.address);
+
+    expect(receiverBalAfter - receiverBalBefore).to.equal(feeAmount);
+    expect(executorBalBefore - executorBalAfter).to.equal(feeAmount);
+
+    expect(await executor.nonce()).to.equal(1n);
+  });
+
+  it("Reverts with InsufficientFundsForFee when native coin balance is below required fee amount", async function () {
+    const { executor, target, feeReceiver, relayer, executorEOA } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    await networkHelpers.setBalance(executorEOA.address, 0n);
+
+    const gaslessTx = makeGaslessTx({
+      to: await target.getAddress(),
+      value: 0n,
+      data: target.interface.encodeFunctionData("ok", ["0x06"]),
+      feeToken: ethers.ZeroAddress,
+      maxTokenFee: ethers.parseEther("1"),
+      coinPriceInToken: ethers.parseEther("1"),
+      feeTransferGasLimit: 100_000n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    const { signature } = await signGaslessTx({
+      conn,
+      executorSigner: await ethers.getSigner(executorEOA.address),
+      executorAddress: executorEOA.address,
+      gaslessTx,
+    });
+
+    await expect(
+      executor.connect(relayer).executeTransaction(gaslessTx, signature, false, { gasPrice: 1_000_000_000n })
+    )
+      .to.be.revertedWithCustomError(executor, "InsufficientFundsForFee")
+      .withArgs(ethers.ZeroAddress, 0n, (fee) => fee > 0n);
+
+    expect(await executor.nonce()).to.equal(0n);
+  });
+
+  it("Reverts with ZeroFeeReceiver when native coin fee receiver is zero address", async function () {
+    const { executor, target, relayer, executorEOA } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    const gaslessTx = makeGaslessTx({
+      to: await target.getAddress(),
+      value: 0n,
+      data: target.interface.encodeFunctionData("ok", ["0x07"]),
+      feeToken: ethers.ZeroAddress,
+      maxTokenFee: ethers.parseEther("1"),
+      coinPriceInToken: ethers.parseEther("1"),
+      feeTransferGasLimit: 100_000n,
+      baseGas: 0n,
+      feeReceiver: ethers.ZeroAddress,
+      nonce: 0n,
+    });
+
+    const { signature } = await signGaslessTx({
+      conn,
+      executorSigner: await ethers.getSigner(executorEOA.address),
+      executorAddress: executorEOA.address,
+      gaslessTx,
+    });
+
+    const executorBalBefore = await ethers.provider.getBalance(executorEOA.address);
+
+    await expect(
+      executor.connect(relayer).executeTransaction(gaslessTx, signature, true, { gasPrice: 1_000_000_000n })
+    ).to.be.revertedWithCustomError(executor, "ZeroFeeReceiver");
+
+    expect(await ethers.provider.getBalance(executorEOA.address)).to.equal(executorBalBefore);
+    expect(await executor.nonce()).to.equal(0n);
+  });
+
+  it("Reverts with NativeFeeTransferFailed when fee receiver rejects native coin", async function () {
+    const { executor, token, target, relayer, executorEOA } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    // ERC20Mock has neither receive() nor fallback(), so a plain native transfer to it reverts.
+    const rejectingReceiver = await token.getAddress();
+
+    const gaslessTx = makeGaslessTx({
+      to: await target.getAddress(),
+      value: 0n,
+      data: target.interface.encodeFunctionData("ok", ["0x08"]),
+      feeToken: ethers.ZeroAddress,
+      maxTokenFee: ethers.parseEther("1"),
+      coinPriceInToken: ethers.parseEther("1"),
+      feeTransferGasLimit: 100_000n,
+      baseGas: 0n,
+      feeReceiver: rejectingReceiver,
+      nonce: 0n,
+    });
+
+    const { signature } = await signGaslessTx({
+      conn,
+      executorSigner: await ethers.getSigner(executorEOA.address),
+      executorAddress: executorEOA.address,
+      gaslessTx,
+    });
+
+    const executorBalBefore = await ethers.provider.getBalance(executorEOA.address);
+
+    // forced == true must not soften a failed fee transfer.
+    await expect(
+      executor.connect(relayer).executeTransaction(gaslessTx, signature, true, { gasPrice: 1_000_000_000n })
+    )
+      .to.be.revertedWithCustomError(executor, "NativeFeeTransferFailed")
+      .withArgs(rejectingReceiver, (fee) => fee > 0n);
+
+    expect(await ethers.provider.getBalance(executorEOA.address)).to.equal(executorBalBefore);
+    expect(await executor.nonce()).to.equal(0n);
+    expect(await target.calls()).to.equal(0n);
+  });
+
+  it("Forwards ETH value to each batch call", async function () {
+    const { executor, token, target, feeReceiver, relayer, executorEOA } =
+      await networkHelpers.loadFixture(deployExecutorFixture);
+
+    const firstValue = 100n;
+    const secondValue = 200n;
+
+    const gaslessBatchTx = makeGaslessBatchTx({
+      transactions: [
+        {
+          to: await target.getAddress(),
+          value: firstValue,
+          gasLimit: 200_000n,
+          data: target.interface.encodeFunctionData("ok", ["0x01"]),
+        },
+        {
+          to: await target.getAddress(),
+          value: secondValue,
+          gasLimit: 200_000n,
+          data: target.interface.encodeFunctionData("ok", ["0x02"]),
+        },
+      ],
+      feeToken: await token.getAddress(),
+      maxTokenFee: 0n,
+      coinPriceInToken: 0n,
+      feeTransferGasLimit: 0n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    const { signature } = await signGaslessBatchTx({
+      conn,
+      executorSigner: await ethers.getSigner(executorEOA.address),
+      executorAddress: executorEOA.address,
+      gaslessBatchTx,
+    });
+
+    const executorBalBefore = await ethers.provider.getBalance(executorEOA.address);
+    const targetBalBefore = await ethers.provider.getBalance(await target.getAddress());
+
+    // Set explicit outer gas limit to avoid Hardhat auto-estimation overshooting provider cap.
+    const tx = await executor
+      .connect(relayer)
+      .executeBatchTransaction(gaslessBatchTx, signature, false, { gasLimit: 5_000_000n });
+
+    await expect(tx)
+      .to.emit(executor, "BatchTransactionExecuted")
+      .withArgs(executorEOA.address, 0n, 2n, 2n);
+
+    const executorBalAfter = await ethers.provider.getBalance(executorEOA.address);
+    const targetBalAfter = await ethers.provider.getBalance(await target.getAddress());
+
+    expect(targetBalAfter - targetBalBefore).to.equal(firstValue + secondValue);
+    expect(executorBalBefore - executorBalAfter).to.equal(firstValue + secondValue);
+    expect(await target.lastValue()).to.equal(secondValue);
+    expect(await target.calls()).to.equal(2n);
+  });
+
+  it("Adds ArbGasInfo L1 fee to the fee amount on Arbitrum", async function () {
+    const { executor, token, target, feeReceiver, relayer, deployer, executorEOA, l1FeeOracle } =
+      await networkHelpers.loadFixture(deployArbitrumExecutorFixture);
+
+    const gasPrice = 1_000_000_000n;
+    const mockedL1Fee = 1_000_000_000_000n;
+
+    await l1FeeOracle.setL1Fee(mockedL1Fee);
+    await token.connect(deployer).mint(executorEOA.address, ethers.parseEther("1"));
+
+    // coinPriceInToken == 1e18 prices the fee 1:1 in wei.
+    const gaslessTx = makeGaslessTx({
+      to: await target.getAddress(),
+      value: 0n,
+      data: target.interface.encodeFunctionData("ok", ["0x09"]),
+      feeToken: await token.getAddress(),
+      maxTokenFee: ethers.parseEther("1"),
+      coinPriceInToken: ethers.parseEther("1"),
+      feeTransferGasLimit: 100_000n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    const { signature } = await signGaslessTx({
+      conn,
+      executorSigner: await ethers.getSigner(executorEOA.address),
+      executorAddress: executorEOA.address,
+      gaslessTx,
+    });
+
+    const receiverBalBefore = await token.balanceOf(feeReceiver.address);
+
+    const tx = await executor.connect(relayer).executeTransaction(gaslessTx, signature, false, { gasPrice });
+
+    const feeLog = parseFeeTransferProcessed(executor, await tx.wait());
+
+    expect(feeLog).to.not.equal(undefined);
+
+    const { feeAmount, totalGas, l1Fee } = feeLog.args;
+
+    expect(l1Fee).to.equal(mockedL1Fee);
+    expect(feeAmount).to.equal(totalGas * gasPrice + mockedL1Fee);
+    expect((await token.balanceOf(feeReceiver.address)) - receiverBalBefore).to.equal(feeAmount);
+  });
+
+  it("Adds GasPriceOracle L1 fee upper bound for the calldata size on OP Stack", async function () {
+    const { executor, token, target, feeReceiver, relayer, deployer, executorEOA, l1FeeOracle } =
+      await networkHelpers.loadFixture(deployOpExecutorFixture);
+
+    const gasPrice = 1_000_000_000n;
+    const feePerByte = 1_000_000n;
+
+    // Unsigned tx size = calldata + non-data tx fields + extra entry point `executor` argument.
+    const txOverheadBytes = 80n;
+    const entryPointOverheadBytes = 32n;
+
+    await l1FeeOracle.setL1FeePerByte(feePerByte);
+    await token.connect(deployer).mint(executorEOA.address, ethers.parseEther("1"));
+
+    // coinPriceInToken == 1e18 prices the fee 1:1 in wei.
+    const gaslessTx = makeGaslessTx({
+      to: await target.getAddress(),
+      value: 0n,
+      data: target.interface.encodeFunctionData("ok", ["0x0a"]),
+      feeToken: await token.getAddress(),
+      maxTokenFee: ethers.parseEther("1"),
+      coinPriceInToken: ethers.parseEther("1"),
+      feeTransferGasLimit: 100_000n,
+      baseGas: 0n,
+      feeReceiver: feeReceiver.address,
+      nonce: 0n,
+    });
+
+    const { signature } = await signGaslessTx({
+      conn,
+      executorSigner: await ethers.getSigner(executorEOA.address),
+      executorAddress: executorEOA.address,
+      gaslessTx,
+    });
+
+    const receiverBalBefore = await token.balanceOf(feeReceiver.address);
+
+    const tx = await executor.connect(relayer).executeTransaction(gaslessTx, signature, false, { gasPrice });
+
+    const unsignedTxSize = BigInt(ethers.dataLength(tx.data)) + txOverheadBytes + entryPointOverheadBytes;
+    const expectedL1Fee = unsignedTxSize * feePerByte;
+
+    const feeLog = parseFeeTransferProcessed(executor, await tx.wait());
+
+    expect(feeLog).to.not.equal(undefined);
+
+    const { feeAmount, totalGas, l1Fee } = feeLog.args;
+
+    expect(l1Fee).to.equal(expectedL1Fee);
+    expect(feeAmount).to.equal(totalGas * gasPrice + expectedL1Fee);
+    expect((await token.balanceOf(feeReceiver.address)) - receiverBalBefore).to.equal(feeAmount);
   });
 });
