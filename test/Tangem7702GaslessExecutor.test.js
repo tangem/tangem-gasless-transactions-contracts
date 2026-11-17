@@ -65,6 +65,9 @@ const HIGH_CALL_GAS_COST = 3_000_000n;
 const LARGE_CALL_GAS_LIMIT = 6_300_000n;
 const WITHHELD_GAS_SHARE = LARGE_CALL_GAS_LIMIT / 63n;
 
+// Cold account access cost of the test EVM (Osaka).
+const COLD_ACCOUNT_ACCESS_COST = 2600n;
+
 async function deployExecutorFixture() {
   return deployExecutor({
     executorSignerIndex: 1,
@@ -2171,6 +2174,90 @@ describe("Tangem7702GaslessExecutor", function () {
     expect(executorBalBefore - executorBalAfter).to.equal(firstValue + secondValue);
     expect(await target.lastValue()).to.equal(secondValue);
     expect(await target.calls()).to.equal(2n);
+  });
+
+  it("Charges 16 gas for every calldata byte, zero bytes included", async function () {
+    const extraBytes = 64;
+
+    async function totalGasFor(extraData) {
+      const { executor, token, target, feeReceiver, relayer, deployer, executorEOA } =
+        await networkHelpers.loadFixture(deployExecutorFixture);
+
+      await token.connect(deployer).mint(executorEOA.address, ethers.parseEther("1"));
+
+      const gaslessTx = makeGaslessTx({
+        to: await target.getAddress(),
+        value: 0n,
+        data: target.interface.encodeFunctionData("ok", ["0x0b"]),
+        feeToken: await token.getAddress(),
+        maxTokenFee: ethers.parseEther("1"),
+        coinPriceInToken: ethers.parseEther("1"),
+        feeTransferGasLimit: 100_000n,
+        baseGas: 0n,
+        feeReceiver: feeReceiver.address,
+        nonce: 0n,
+      });
+
+      const { signature } = await signGaslessTx({
+        conn,
+        executorSigner: await ethers.getSigner(executorEOA.address),
+        executorAddress: executorEOA.address,
+        gaslessTx,
+      });
+
+      const data = ethers.concat([
+        executor.interface.encodeFunctionData("executeTransaction", [gaslessTx, signature, false]),
+        extraData,
+      ]);
+      const tx = await relayer.sendTransaction({ to: executorEOA.address, data });
+
+      return parseFeeTransferProcessed(executor, await tx.wait()).args.totalGas;
+    }
+
+    const totalGas = await totalGasFor("0x");
+    const totalGasWithExtraBytes = await totalGasFor(new Uint8Array(extraBytes));
+
+    // ABI decoding ignores trailing bytes, so only the calldata gas changes.
+    expect(totalGasWithExtraBytes - totalGas).to.equal(BigInt(extraBytes) * 16n);
+  });
+
+  it("Charges the L1 fee oracle call as measured gas", async function () {
+    async function totalGasFor(fixture) {
+      const { executor, token, target, feeReceiver, relayer, deployer, executorEOA } =
+        await networkHelpers.loadFixture(fixture);
+
+      await token.connect(deployer).mint(executorEOA.address, ethers.parseEther("1"));
+
+      const gaslessTx = makeGaslessTx({
+        to: await target.getAddress(),
+        value: 0n,
+        data: target.interface.encodeFunctionData("ok", ["0x0c"]),
+        feeToken: await token.getAddress(),
+        maxTokenFee: ethers.parseEther("1"),
+        coinPriceInToken: ethers.parseEther("1"),
+        feeTransferGasLimit: 100_000n,
+        baseGas: 0n,
+        feeReceiver: feeReceiver.address,
+        nonce: 0n,
+      });
+
+      const { signature } = await signGaslessTx({
+        conn,
+        executorSigner: await ethers.getSigner(executorEOA.address),
+        executorAddress: executorEOA.address,
+        gaslessTx,
+      });
+
+      const tx = await executor.connect(relayer).executeTransaction(gaslessTx, signature, false);
+
+      return parseFeeTransferProcessed(executor, await tx.wait()).args.totalGas;
+    }
+
+    const totalGas = await totalGasFor(deployExecutorFixture);
+    const arbitrumTotalGas = await totalGasFor(deployArbitrumExecutorFixture);
+
+    // The oracle is cold in the measured transaction.
+    expect(arbitrumTotalGas - totalGas).to.be.greaterThanOrEqual(COLD_ACCOUNT_ACCESS_COST);
   });
 
   it("Adds ArbGasInfo L1 fee to the fee amount on Arbitrum", async function () {
