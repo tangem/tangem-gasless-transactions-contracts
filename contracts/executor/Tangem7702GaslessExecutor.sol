@@ -213,10 +213,10 @@ contract Tangem7702GaslessExecutor is
 
     /// @notice Computes and transfers the fee in `fee.feeToken` to `feeReceiver`.
     /// @dev Calculates `totalGas` as:
-    ///      `totalGas = (startGas - gasleft()) + fee.feeTransferGasLimit + fee.baseGas`,
-    ///      then converts the native coin cost (`totalGas * tx.gasprice`) into `feeToken`
-    ///      using `fee.coinPriceInToken / PRICE_PRECISION`. Measures the gas spent by the
-    ///      fee transfer itself and enforces `feeTransferGasLimit` depending on `forced`.
+    ///      `totalGas = (startGas - gasleft()) + calldata gas + fee.feeTransferGasLimit + fee.baseGas`,
+    ///      where the measured part includes the L1 fee oracle call. Then converts the native coin cost
+    ///      (`totalGas * tx.gasprice + l1Fee`) into `feeToken` using `fee.coinPriceInToken / PRICE_PRECISION`.
+    ///      Measures the gas spent by the fee transfer itself and enforces `feeTransferGasLimit` depending on `forced`.
     ///
     ///      Strict invariants (NEVER softened by `forced`):
     ///      - `feeAmount <= fee.maxTokenFee`
@@ -235,14 +235,12 @@ contract Tangem7702GaslessExecutor is
     )
         private
     {
-        uint256 gasAfterUserCall = gasleft();
-        uint256 gasUsed = startGas > gasAfterUserCall ? startGas - gasAfterUserCall : 0;
-        uint256 totalGas = gasUsed + fee.feeTransferGasLimit + fee.baseGas;
-        uint256 weiCost = totalGas * tx.gasprice;
-
-        // Add L1 data fee for L2 networks
         uint256 l1Fee = _getL1Fee();
-        weiCost += l1Fee;
+
+        uint256 gasNow = gasleft();
+        uint256 gasUsed = startGas > gasNow ? startGas - gasNow : 0;
+        uint256 totalGas = gasUsed + _calldataGas() + fee.feeTransferGasLimit + fee.baseGas;
+        uint256 weiCost = totalGas * tx.gasprice + l1Fee;
 
         uint256 feeAmount = (weiCost * fee.coinPriceInToken) / PRICE_PRECISION;
     
