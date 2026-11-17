@@ -22,6 +22,9 @@ abstract contract GasOverhead is IGasOverhead {
     /// @dev Extra `executor` argument of the EntryPoint call
     uint256 private constant ENTRY_POINT_OVERHEAD = 32;
 
+    /// @dev Calldata gas per byte, priced as a non-zero byte
+    uint256 private constant CALLDATA_GAS_PER_BYTE = 16;
+
     /// @notice Gas reserved for everything after the user call, except the fee transfer.
     uint256 public immutable BASE_GAS_AFTER_CALL;
 
@@ -74,6 +77,11 @@ abstract contract GasOverhead is IGasOverhead {
                 overhead += NEW_ACCOUNT_COST;
             }
         }
+    }
+
+    /// @notice Upper bound of the calldata gas of the EntryPoint transaction.
+    function _calldataGas() internal pure returns (uint256) {
+        return (msg.data.length + ENTRY_POINT_OVERHEAD) * CALLDATA_GAS_PER_BYTE;
     }
 
     /// @notice L1 data fee in wei for the current transaction.
