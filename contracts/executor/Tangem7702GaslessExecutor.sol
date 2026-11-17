@@ -93,8 +93,10 @@ contract Tangem7702GaslessExecutor is
 
         _verifyGaslessTransaction(gaslessTx, signature);
 
-        uint256 reservedGas = _callOverhead(transaction.to, transaction.value) + _reservedPostCallGas(gaslessTx.fee);
-        require(gasleft() >= transaction.gasLimit + reservedGas, InsufficientGas());
+        _checkGasLimit(
+            transaction.gasLimit,
+            _callOverhead(transaction.to, transaction.value) + _reservedPostCallGas(gaslessTx.fee)
+        );
 
         (bool success, bytes memory returnData)
             = transaction.to.call{value: transaction.value, gas: transaction.gasLimit}(transaction.data);
@@ -162,8 +164,7 @@ contract Tangem7702GaslessExecutor is
 
         _verifyGaslessBatchTransaction(gaslessTx, signature);
 
-        uint256 reservedBase = _reservedPostCallGas(gaslessTx.fee) + totalCallOverhead;
-        require(gasleft() >= totalGasLimit + reservedBase, InsufficientGas());
+        _checkGasLimit(totalGasLimit, _reservedPostCallGas(gaslessTx.fee) + totalCallOverhead);
 
         uint256 executedCalls = 0;
 
@@ -336,6 +337,15 @@ contract Tangem7702GaslessExecutor is
         if (fee.coinPriceInToken > 0) {
             reserved += fee.feeTransferGasLimit;
         }
+    }
+
+    /// @notice Reverts unless calls get `gasLimit` under the 63/64 rule with `reservedGas` kept aside.
+    function _checkGasLimit(uint256 gasLimit, uint256 reservedGas) private view {
+        uint256 availableGas = gasleft();
+        require(availableGas > reservedGas, InsufficientGas());
+
+        availableGas -= reservedGas;
+        require(gasLimit <= availableGas - availableGas / 64, InsufficientGas());
     }
 
     /// @notice Returns the executor balance of `token`, or native coin balance.
