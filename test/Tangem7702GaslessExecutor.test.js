@@ -54,6 +54,17 @@ const L1_FEE_MODE = { None: 0, Arbitrum: 1, OpStack: 2 };
 const BASE_GAS_AFTER_CALL_DEFAULT = 8000n;
 const BASE_GAS_AFTER_CALL_OP = 18000n;
 
+// Mirrors IGasOverhead.CallGasCosts with Ethereum values after Glamsterdam.
+const CALL_GAS_COSTS = { coldAccountSurcharge: 3000n, valueTransferCost: 11300n, newAccountCost: 183600n };
+
+// Outer gas limit of the call reserve tests and a call cost that does not fit into it.
+const RESERVE_TEST_GAS_LIMIT = 1_000_000n;
+const HIGH_CALL_GAS_COST = 3_000_000n;
+
+// Call gas limit whose 1/63 share (100k) exceeds all other outer gas above it, and that share.
+const LARGE_CALL_GAS_LIMIT = 6_300_000n;
+const WITHHELD_GAS_SHARE = LARGE_CALL_GAS_LIMIT / 63n;
+
 async function deployExecutorFixture() {
   return deployExecutor({
     executorSignerIndex: 1,
@@ -97,7 +108,102 @@ async function deployHighReserveExecutorFixture() {
   });
 }
 
-async function deployExecutor({ executorSignerIndex, baseGasAfterCall, l1FeeMode }) {
+// Each fixture raises one call cost above RESERVE_TEST_GAS_LIMIT to show when it is reserved.
+async function deployHighColdSurchargeExecutorFixture() {
+  return deployExecutor({
+    executorSignerIndex: 7,
+    baseGasAfterCall: BASE_GAS_AFTER_CALL_DEFAULT,
+    l1FeeMode: L1_FEE_MODE.None,
+    callGasCosts: { ...CALL_GAS_COSTS, coldAccountSurcharge: HIGH_CALL_GAS_COST },
+  });
+}
+
+async function deployHighValueTransferCostExecutorFixture() {
+  return deployExecutor({
+    executorSignerIndex: 8,
+    baseGasAfterCall: BASE_GAS_AFTER_CALL_DEFAULT,
+    l1FeeMode: L1_FEE_MODE.None,
+    callGasCosts: { ...CALL_GAS_COSTS, valueTransferCost: HIGH_CALL_GAS_COST },
+  });
+}
+
+async function deployHighNewAccountCostExecutorFixture() {
+  return deployExecutor({
+    executorSignerIndex: 9,
+    baseGasAfterCall: BASE_GAS_AFTER_CALL_DEFAULT,
+    l1FeeMode: L1_FEE_MODE.None,
+    callGasCosts: { ...CALL_GAS_COSTS, newAccountCost: HIGH_CALL_GAS_COST },
+  });
+}
+
+// Signs a fee-less call with empty data.
+async function signReserveTestCall({ executor, token, feeReceiver, executorEOA }, { to, value, gasLimit = 100_000n }) {
+  const gaslessTx = makeGaslessTx({
+    to,
+    value,
+    gasLimit,
+    data: "0x",
+    feeToken: await token.getAddress(),
+    maxTokenFee: 0n,
+    coinPriceInToken: 0n,
+    feeTransferGasLimit: 0n,
+    baseGas: 0n,
+    feeReceiver: feeReceiver.address,
+    nonce: await executor.nonce(),
+  });
+
+  const { signature } = await signGaslessTx({
+    conn,
+    executorSigner: await ethers.getSigner(executorEOA.address),
+    executorAddress: executorEOA.address,
+    gaslessTx,
+  });
+
+  return { gaslessTx, signature };
+}
+
+// Signs and sends a call from signReserveTestCall with RESERVE_TEST_GAS_LIMIT as the outer gas limit.
+async function executeReserveTestCall(fixture, call) {
+  const { gaslessTx, signature } = await signReserveTestCall(fixture, call);
+
+  return fixture.executor
+    .connect(fixture.relayer)
+    .executeTransaction(gaslessTx, signature, false, { gasLimit: RESERVE_TEST_GAS_LIMIT });
+}
+
+// Batch counterpart of signReserveTestCall; `calls` holds `{ to, value, gasLimit? }` items.
+async function signReserveTestBatch({ executor, token, feeReceiver, executorEOA }, calls) {
+  const gaslessBatchTx = makeGaslessBatchTx({
+    transactions: calls.map(({ to, value, gasLimit = 100_000n }) => ({ to, value, gasLimit, data: "0x" })),
+    feeToken: await token.getAddress(),
+    maxTokenFee: 0n,
+    coinPriceInToken: 0n,
+    feeTransferGasLimit: 0n,
+    baseGas: 0n,
+    feeReceiver: feeReceiver.address,
+    nonce: await executor.nonce(),
+  });
+
+  const { signature } = await signGaslessBatchTx({
+    conn,
+    executorSigner: await ethers.getSigner(executorEOA.address),
+    executorAddress: executorEOA.address,
+    gaslessBatchTx,
+  });
+
+  return { gaslessBatchTx, signature };
+}
+
+// Batch counterpart of executeReserveTestCall.
+async function executeReserveTestBatch(fixture, calls) {
+  const { gaslessBatchTx, signature } = await signReserveTestBatch(fixture, calls);
+
+  return fixture.executor
+    .connect(fixture.relayer)
+    .executeBatchTransaction(gaslessBatchTx, signature, false, { gasLimit: RESERVE_TEST_GAS_LIMIT });
+}
+
+async function deployExecutor({ executorSignerIndex, baseGasAfterCall, l1FeeMode, callGasCosts = CALL_GAS_COSTS }) {
   // Get deterministic test signers: deployer (deploys contracts), executorEOA (acts as delegated account),
   // relayer (external caller), feeReceiver (receives ERC-20 fee).
   const signers = await ethers.getSigners();
@@ -106,7 +212,7 @@ async function deployExecutor({ executorSignerIndex, baseGasAfterCall, l1FeeMode
 
   // Deploy the executor implementation contract (we will copy its runtime code to executorEOA).
   const ExecutorImpl = await ethers.getContractFactory("Tangem7702GaslessExecutor", deployer);
-  const impl = await ExecutorImpl.deploy(baseGasAfterCall, l1FeeMode);
+  const impl = await ExecutorImpl.deploy(baseGasAfterCall, l1FeeMode, callGasCosts);
 
   // Wait until the deployment transaction is mined and the contract is available.
   await impl.waitForDeployment();
@@ -2202,7 +2308,7 @@ describe("Tangem7702GaslessExecutor", function () {
     const { deployer } = await networkHelpers.loadFixture(deployExecutorFixture);
     const Executor = await ethers.getContractFactory("Tangem7702GaslessExecutor", deployer);
 
-    await expect(Executor.deploy(0n, L1_FEE_MODE.None))
+    await expect(Executor.deploy(0n, L1_FEE_MODE.None, CALL_GAS_COSTS))
       .to.be.revertedWithCustomError(Executor, "ZeroBaseGasAfterCall");
   });
 
@@ -2212,7 +2318,7 @@ describe("Tangem7702GaslessExecutor", function () {
 
     await networkHelpers.setCode(ARB_GAS_INFO_ADDRESS, "0x");
 
-    await expect(Executor.deploy(BASE_GAS_AFTER_CALL_DEFAULT, L1_FEE_MODE.Arbitrum))
+    await expect(Executor.deploy(BASE_GAS_AFTER_CALL_DEFAULT, L1_FEE_MODE.Arbitrum, CALL_GAS_COSTS))
       .to.be.revertedWithCustomError(Executor, "L1FeeOracleNotDeployed")
       .withArgs(ARB_GAS_INFO_ADDRESS);
   });
@@ -2223,7 +2329,7 @@ describe("Tangem7702GaslessExecutor", function () {
 
     await networkHelpers.setCode(OP_GAS_PRICE_ORACLE_ADDRESS, "0x");
 
-    await expect(Executor.deploy(BASE_GAS_AFTER_CALL_OP, L1_FEE_MODE.OpStack))
+    await expect(Executor.deploy(BASE_GAS_AFTER_CALL_OP, L1_FEE_MODE.OpStack, CALL_GAS_COSTS))
       .to.be.revertedWithCustomError(Executor, "L1FeeOracleNotDeployed")
       .withArgs(OP_GAS_PRICE_ORACLE_ADDRESS);
   });
@@ -2235,7 +2341,7 @@ describe("Tangem7702GaslessExecutor", function () {
     // ExecutorTargetMock reverts with "FALLBACK" on unknown selectors.
     await installMockAt("ExecutorTargetMock", ARB_GAS_INFO_ADDRESS, deployer);
 
-    await expect(Executor.deploy(BASE_GAS_AFTER_CALL_DEFAULT, L1_FEE_MODE.Arbitrum))
+    await expect(Executor.deploy(BASE_GAS_AFTER_CALL_DEFAULT, L1_FEE_MODE.Arbitrum, CALL_GAS_COSTS))
       .to.be.revertedWith("FALLBACK");
   });
 
@@ -2243,13 +2349,27 @@ describe("Tangem7702GaslessExecutor", function () {
     const { deployer } = await networkHelpers.loadFixture(deployExecutorFixture);
     const Executor = await ethers.getContractFactory("Tangem7702GaslessExecutor", deployer);
 
-    await expect(Executor.deploy(BASE_GAS_AFTER_CALL_DEFAULT, 3)).to.be.revert(ethers);
+    await expect(Executor.deploy(BASE_GAS_AFTER_CALL_DEFAULT, 3, CALL_GAS_COSTS)).to.be.revert(ethers);
+  });
+
+  it("Reverts deployment with ZeroCallGasCost when any call gas cost is zero", async function () {
+    const { deployer } = await networkHelpers.loadFixture(deployExecutorFixture);
+    const Executor = await ethers.getContractFactory("Tangem7702GaslessExecutor", deployer);
+
+    for (const field of Object.keys(CALL_GAS_COSTS)) {
+      await expect(
+        Executor.deploy(BASE_GAS_AFTER_CALL_DEFAULT, L1_FEE_MODE.None, { ...CALL_GAS_COSTS, [field]: 0n })
+      ).to.be.revertedWithCustomError(Executor, "ZeroCallGasCost");
+    }
   });
 
   it("Exposes constructor parameters on the delegated account", async function () {
     const l1 = await networkHelpers.loadFixture(deployExecutorFixture);
     expect(await l1.executor.BASE_GAS_AFTER_CALL()).to.equal(BASE_GAS_AFTER_CALL_DEFAULT);
     expect(await l1.executor.L1_FEE_MODE()).to.equal(BigInt(L1_FEE_MODE.None));
+    expect(await l1.executor.COLD_ACCOUNT_SURCHARGE()).to.equal(CALL_GAS_COSTS.coldAccountSurcharge);
+    expect(await l1.executor.VALUE_TRANSFER_COST()).to.equal(CALL_GAS_COSTS.valueTransferCost);
+    expect(await l1.executor.NEW_ACCOUNT_COST()).to.equal(CALL_GAS_COSTS.newAccountCost);
 
     const arbitrum = await networkHelpers.loadFixture(deployArbitrumExecutorFixture);
     expect(await arbitrum.executor.BASE_GAS_AFTER_CALL()).to.equal(BASE_GAS_AFTER_CALL_DEFAULT);
@@ -2291,6 +2411,113 @@ describe("Tangem7702GaslessExecutor", function () {
     ).to.be.revertedWithCustomError(executor, "InsufficientGas");
 
     expect(await executor.nonce()).to.equal(0n);
+  });
+
+  it("Reserves COLD_ACCOUNT_SURCHARGE for a single call", async function () {
+    const fixture = await networkHelpers.loadFixture(deployHighColdSurchargeExecutorFixture);
+    const { executor, target } = fixture;
+
+    await expect(executeReserveTestCall(fixture, { to: await target.getAddress(), value: 0n }))
+      .to.be.revertedWithCustomError(executor, "InsufficientGas");
+  });
+
+  it("Reserves VALUE_TRANSFER_COST only for a single call with value", async function () {
+    const fixture = await networkHelpers.loadFixture(deployHighValueTransferCostExecutorFixture);
+    const { executor, target } = fixture;
+    const to = await target.getAddress();
+
+    await expect(executeReserveTestCall(fixture, { to, value: 0n })).to.not.revert(ethers);
+
+    await expect(executeReserveTestCall(fixture, { to, value: 1n }))
+      .to.be.revertedWithCustomError(executor, "InsufficientGas");
+  });
+
+  it("Reserves NEW_ACCOUNT_COST only for a single value transfer to a non-existent account", async function () {
+    const fixture = await networkHelpers.loadFixture(deployHighNewAccountCostExecutorFixture);
+    const { executor, target, feeReceiver } = fixture;
+    const newAccount = ethers.Wallet.createRandom().address;
+
+    // An EOA with a balance and a contract both exist, so a value transfer creates nothing.
+    await expect(executeReserveTestCall(fixture, { to: feeReceiver.address, value: 1n })).to.not.revert(ethers);
+    await expect(executeReserveTestCall(fixture, { to: await target.getAddress(), value: 1n }))
+      .to.not.revert(ethers);
+
+    // A call without value does not create the account.
+    await expect(executeReserveTestCall(fixture, { to: newAccount, value: 0n })).to.not.revert(ethers);
+    expect(await ethers.provider.getBalance(newAccount)).to.equal(0n);
+
+    await expect(executeReserveTestCall(fixture, { to: newAccount, value: 1n }))
+      .to.be.revertedWithCustomError(executor, "InsufficientGas");
+  });
+
+  it("Reserves COLD_ACCOUNT_SURCHARGE for every batch call", async function () {
+    const fixture = await networkHelpers.loadFixture(deployHighColdSurchargeExecutorFixture);
+    const { executor, target } = fixture;
+    const to = await target.getAddress();
+
+    await expect(executeReserveTestBatch(fixture, [{ to, value: 0n }, { to, value: 0n }]))
+      .to.be.revertedWithCustomError(executor, "InsufficientGas");
+  });
+
+  it("Reserves NEW_ACCOUNT_COST only for a batch value transfer to a non-existent account", async function () {
+    const fixture = await networkHelpers.loadFixture(deployHighNewAccountCostExecutorFixture);
+    const { executor, feeReceiver } = fixture;
+    const newAccount = ethers.Wallet.createRandom().address;
+
+    await expect(
+      executeReserveTestBatch(fixture, [
+        { to: feeReceiver.address, value: 1n },
+        { to: newAccount, value: 0n },
+      ])
+    ).to.not.revert(ethers);
+
+    await expect(
+      executeReserveTestBatch(fixture, [
+        { to: feeReceiver.address, value: 1n },
+        { to: newAccount, value: 1n },
+      ])
+    ).to.be.revertedWithCustomError(executor, "InsufficientGas");
+  });
+
+  // Without the 1/63 share in the check, the outer gas below covers the call gas limit and every reserve.
+  it("Reserves the gas withheld by the 63/64 rule for a single call", async function () {
+    const fixture = await networkHelpers.loadFixture(deployExecutorFixture);
+    const { executor, target, relayer } = fixture;
+
+    const { gaslessTx, signature } = await signReserveTestCall(fixture, {
+      to: await target.getAddress(),
+      value: 0n,
+      gasLimit: LARGE_CALL_GAS_LIMIT,
+    });
+    const outerGas = LARGE_CALL_GAS_LIMIT + WITHHELD_GAS_SHARE;
+
+    await expect(executor.connect(relayer).executeTransaction(gaslessTx, signature, false, { gasLimit: outerGas }))
+      .to.be.revertedWithCustomError(executor, "InsufficientGas");
+
+    await expect(
+      executor.connect(relayer).executeTransaction(gaslessTx, signature, false, { gasLimit: outerGas + 200_000n })
+    ).to.not.revert(ethers);
+  });
+
+  it("Reserves the gas withheld by the 63/64 rule for a batch", async function () {
+    const fixture = await networkHelpers.loadFixture(deployExecutorFixture);
+    const { executor, target, relayer } = fixture;
+    const to = await target.getAddress();
+    const gasLimit = LARGE_CALL_GAS_LIMIT / 2n;
+
+    const { gaslessBatchTx, signature } = await signReserveTestBatch(fixture, [
+      { to, value: 0n, gasLimit },
+      { to, value: 0n, gasLimit },
+    ]);
+    const outerGas = LARGE_CALL_GAS_LIMIT + WITHHELD_GAS_SHARE;
+
+    await expect(
+      executor.connect(relayer).executeBatchTransaction(gaslessBatchTx, signature, false, { gasLimit: outerGas })
+    ).to.be.revertedWithCustomError(executor, "InsufficientGas");
+
+    await expect(
+      executor.connect(relayer).executeBatchTransaction(gaslessBatchTx, signature, false, { gasLimit: outerGas + 200_000n })
+    ).to.not.revert(ethers);
   });
 
   it("Ignores L1 fee oracles when l1FeeMode is None", async function () {
