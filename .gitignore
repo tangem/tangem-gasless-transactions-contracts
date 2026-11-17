@@ -17,7 +17,6 @@ lcov.info
 # Exporters files
 /abi
 /bin
-/types
 
 # Tenderly
 /deployments
