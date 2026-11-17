@@ -28,8 +28,8 @@ abstract contract GasOverhead is IGasOverhead {
     /// @notice Gas reserved for everything after the user call, except the fee transfer.
     uint256 public immutable BASE_GAS_AFTER_CALL;
 
-    /// @notice Extra gas of a CALL to a cold address.
-    uint256 public immutable COLD_ACCOUNT_SURCHARGE;
+    /// @notice Access cost of a CALL to a cold address.
+    uint256 public immutable COLD_ACCOUNT_ACCESS_COST;
 
     /// @notice Extra gas of a CALL with value.
     uint256 public immutable VALUE_TRANSFER_COST;
@@ -44,13 +44,13 @@ abstract contract GasOverhead is IGasOverhead {
     constructor(uint256 baseGasAfterCall_, L1FeeMode l1FeeMode_, CallGasCosts memory callGasCosts_) {
         require(baseGasAfterCall_ != 0, ZeroBaseGasAfterCall());
         require(
-            callGasCosts_.coldAccountSurcharge != 0 && callGasCosts_.valueTransferCost != 0
+            callGasCosts_.coldAccountAccessCost != 0 && callGasCosts_.valueTransferCost != 0
                 && callGasCosts_.newAccountCost != 0,
             ZeroCallGasCost()
         );
 
         BASE_GAS_AFTER_CALL = baseGasAfterCall_;
-        COLD_ACCOUNT_SURCHARGE = callGasCosts_.coldAccountSurcharge;
+        COLD_ACCOUNT_ACCESS_COST = callGasCosts_.coldAccountAccessCost;
         VALUE_TRANSFER_COST = callGasCosts_.valueTransferCost;
         NEW_ACCOUNT_COST = callGasCosts_.newAccountCost;
         L1_FEE_MODE = l1FeeMode_;
@@ -65,10 +65,10 @@ abstract contract GasOverhead is IGasOverhead {
         }
     }
 
-    /// @notice Extra gas of a CALL to `to` with `value`, assuming `to` is cold.
+    /// @notice Access and value gas of a CALL to `to` with `value`, assuming `to` is cold.
     /// @dev Zero codehash means the transfer creates the account.
     function _callOverhead(address to, uint256 value) internal view returns (uint256 overhead) {
-        overhead = COLD_ACCOUNT_SURCHARGE;
+        overhead = COLD_ACCOUNT_ACCESS_COST;
 
         if (value > 0) {
             overhead += VALUE_TRANSFER_COST;

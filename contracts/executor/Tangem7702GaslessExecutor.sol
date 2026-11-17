@@ -31,9 +31,9 @@ contract Tangem7702GaslessExecutor is
     uint256 private constant PRICE_PRECISION = 1 ether;
 
     /// @notice Per-iteration loop body overhead for batch execution.
-    /// @dev Covers: stack manipulation, counter increment, conditional jumps,
-    ///      memory operations, and warm CALL opcode base cost (100 gas).
-    ///      Measured ~1085 gas/iteration via gasleft() instrumentation + ~10% margin.
+    /// @dev Covers: stack manipulation, counter increment, conditional jumps and memory operations.
+    ///      The CALL access cost is reserved by `_callOverhead`.
+    ///      Measured ~1100 gas/iteration via gasleft() instrumentation + ~9% margin.
     uint256 private constant BATCH_LOOP_OVERHEAD = 1200;
 
     // EIP-712 types
