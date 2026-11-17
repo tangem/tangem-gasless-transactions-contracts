@@ -150,16 +150,13 @@ contract Tangem7702GaslessExecutor is
 
         uint256 totalGasLimit = 0;
         uint256 totalCallOverhead = 0;
-        for (uint256 i = 0; i < txs.length; ) {
+        for (uint256 i = 0; i < txs.length; ++i) {
             Transaction calldata transaction = txs[i];
 
             require(transaction.to != address(0), ZeroTarget());
 
             totalGasLimit += transaction.gasLimit;
             totalCallOverhead += BATCH_LOOP_OVERHEAD + _callOverhead(transaction.to, transaction.value);
-            unchecked {
-                ++i;
-            }
         }
 
         _verifyGaslessBatchTransaction(gaslessTx, signature);
@@ -168,7 +165,7 @@ contract Tangem7702GaslessExecutor is
 
         uint256 executedCalls = 0;
 
-        for (uint256 i = 0; i < txs.length; ) {
+        for (uint256 i = 0; i < txs.length; ++i) {
             Transaction calldata transaction = txs[i];
 
             (bool success, bytes memory returnData)
@@ -194,9 +191,6 @@ contract Tangem7702GaslessExecutor is
             }
 
             executedCalls = i + 1;
-            unchecked {
-                ++i;
-            }
         }
 
         if (gaslessTx.fee.coinPriceInToken > 0) {
@@ -374,11 +368,8 @@ contract Tangem7702GaslessExecutor is
     /// @return hash Array hash suitable for inclusion into the EIP-712 struct hash.
     function _hashTransactions(Transaction[] calldata txs) private pure returns (bytes32) {
         bytes32[] memory hashes = new bytes32[](txs.length);
-        for (uint256 i = 0; i < txs.length; ) {
+        for (uint256 i = 0; i < txs.length; ++i) {
             hashes[i] = _hashTransaction(txs[i]);
-            unchecked {
-                ++i;
-            }
         }
         return keccak256(abi.encodePacked(hashes));
     }
