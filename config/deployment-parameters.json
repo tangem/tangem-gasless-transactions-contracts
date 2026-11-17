@@ -1,0 +1,42 @@
+{
+  "ethereum": {
+    "chainId": 1,
+    "baseGasAfterCall": 15000,
+    "l1FeeMode": "None",
+    "coldAccountAccessCost": 3000,
+    "valueTransferCost": 11300,
+    "newAccountCost": 183600
+  },
+  "bsc": {
+    "chainId": 56,
+    "baseGasAfterCall": 15000,
+    "l1FeeMode": "None",
+    "coldAccountAccessCost": 3000,
+    "valueTransferCost": 11300,
+    "newAccountCost": 183600
+  },
+  "polygon": {
+    "chainId": 137,
+    "baseGasAfterCall": 15000,
+    "l1FeeMode": "None",
+    "coldAccountAccessCost": 3000,
+    "valueTransferCost": 11300,
+    "newAccountCost": 183600
+  },
+  "base": {
+    "chainId": 8453,
+    "baseGasAfterCall": 50000,
+    "l1FeeMode": "OpStack",
+    "coldAccountAccessCost": 3000,
+    "valueTransferCost": 11300,
+    "newAccountCost": 183600
+  },
+  "arbitrum": {
+    "chainId": 42161,
+    "baseGasAfterCall": 15000,
+    "l1FeeMode": "Arbitrum",
+    "coldAccountAccessCost": 3000,
+    "valueTransferCost": 11300,
+    "newAccountCost": 183600
+  }
+}

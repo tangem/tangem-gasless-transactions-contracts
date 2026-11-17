@@ -51,11 +51,14 @@ function parseFeeTransferProcessed(executor, receipt) {
 // Mirrors IGasOverhead.L1FeeMode.
 const L1_FEE_MODE = { None: 0, Arbitrum: 1, OpStack: 2 };
 
-const BASE_GAS_AFTER_CALL_DEFAULT = 8000n;
-const BASE_GAS_AFTER_CALL_OP = 18000n;
+// Deployment values for None and Arbitrum, and for OP Stack, whose cold GasPriceOracle call costs ~30k.
+const BASE_GAS_AFTER_CALL_DEFAULT = 15000n;
+const BASE_GAS_AFTER_CALL_OP = 50000n;
 
 // Mirrors IGasOverhead.CallGasCosts with Ethereum values after Glamsterdam.
 const CALL_GAS_COSTS = { coldAccountAccessCost: 3000n, valueTransferCost: 11300n, newAccountCost: 183600n };
+
+const EXPLICIT_TX_GAS_LIMIT = 1_000_000n;
 
 // Outer gas limit of the call reserve tests and a call cost that does not fit into it.
 const RESERVE_TEST_GAS_LIMIT = 1_000_000n;
@@ -2341,7 +2344,9 @@ describe("Tangem7702GaslessExecutor", function () {
 
     const receiverBalBefore = await token.balanceOf(feeReceiver.address);
 
-    const tx = await executor.connect(relayer).executeTransaction(gaslessTx, signature, false, { gasPrice });
+    const tx = await executor
+      .connect(relayer)
+      .executeTransaction(gaslessTx, signature, false, { gasPrice, gasLimit: EXPLICIT_TX_GAS_LIMIT });
 
     const unsignedTxSize = BigInt(ethers.dataLength(tx.data)) + txOverheadBytes + entryPointOverheadBytes;
     const expectedL1Fee = unsignedTxSize * feePerByte;
@@ -2381,7 +2386,7 @@ describe("Tangem7702GaslessExecutor", function () {
       gaslessTx,
     });
 
-    await executor.connect(relayer).executeTransaction(gaslessTx, signature, false);
+    await executor.connect(relayer).executeTransaction(gaslessTx, signature, false, { gasLimit: EXPLICIT_TX_GAS_LIMIT });
 
     // EIP712 `_nameFallback` and `_versionFallback` occupy the first two slots, `nonce` follows.
     expect(await executor.nonce()).to.equal(1n);
