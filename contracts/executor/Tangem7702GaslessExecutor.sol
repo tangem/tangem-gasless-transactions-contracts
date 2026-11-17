@@ -36,17 +36,6 @@ contract Tangem7702GaslessExecutor is
     ///      Measured ~1085 gas/iteration via gasleft() instrumentation + ~10% margin.
     uint256 private constant BATCH_LOOP_OVERHEAD = 1200;
 
-    /// @notice Additional gas the EVM charges the caller for a CALL to a cold address.
-    /// @dev CALL to a cold address costs 2600 gas vs 100 for warm (EIP-2929).
-    ///      We pessimistically treat every batch target as cold, because on-chain
-    ///      there is no way to know the access-list state ahead of execution.
-    uint256 private constant COLD_ADDRESS_SURCHARGE = 2500;
-
-    /// @notice Additional gas the EVM charges the caller when CALL transfers non-zero value.
-    /// @dev positive_value_cost per the Yellow Paper; charged to the caller's budget,
-    ///      NOT deducted from the forwarded gas limit.
-    uint256 private constant POSITIVE_VALUE_COST = 9000;
-
     // EIP-712 types
     string private constant GASLESS_TRANSACTION_TYPE =
         "GaslessTransaction(Transaction transaction,Fee fee,uint256 nonce)";
@@ -76,9 +65,10 @@ contract Tangem7702GaslessExecutor is
     ///      signature compatibility with existing clients.
     /// @param baseGasAfterCall_ See {BASE_GAS_AFTER_CALL}.
     /// @param l1FeeMode_ See {L1_FEE_MODE}.
-    constructor(uint256 baseGasAfterCall_, L1FeeMode l1FeeMode_)
+    /// @param callGasCosts_ See {IGasOverhead-CallGasCosts}.
+    constructor(uint256 baseGasAfterCall_, L1FeeMode l1FeeMode_, CallGasCosts memory callGasCosts_)
         EIP712("Tangem7702GaslessExecutor", "1")
-        GasOverhead(baseGasAfterCall_, l1FeeMode_)
+        GasOverhead(baseGasAfterCall_, l1FeeMode_, callGasCosts_)
     {}
 
     /// @inheritdoc ITangem7702GaslessExecutor
@@ -103,10 +93,8 @@ contract Tangem7702GaslessExecutor is
 
         _verifyGaslessTransaction(gaslessTx, signature);
 
-        require(
-            gasleft() >= transaction.gasLimit + _reservedPostCallGas(gaslessTx.fee),
-            InsufficientGas()
-        );
+        uint256 reservedGas = _callOverhead(transaction.to, transaction.value) + _reservedPostCallGas(gaslessTx.fee);
+        require(gasleft() >= transaction.gasLimit + reservedGas, InsufficientGas());
 
         (bool success, bytes memory returnData)
             = transaction.to.call{value: transaction.value, gas: transaction.gasLimit}(transaction.data);
@@ -160,17 +148,13 @@ contract Tangem7702GaslessExecutor is
 
         uint256 totalGasLimit = 0;
         uint256 totalCallOverhead = 0;
-        uint256 perCallBase = BATCH_LOOP_OVERHEAD + COLD_ADDRESS_SURCHARGE;
         for (uint256 i = 0; i < txs.length; ) {
             Transaction calldata transaction = txs[i];
 
             require(transaction.to != address(0), ZeroTarget());
 
             totalGasLimit += transaction.gasLimit;
-            totalCallOverhead += perCallBase;
-            if (transaction.value > 0) {
-                totalCallOverhead += POSITIVE_VALUE_COST;
-            }
+            totalCallOverhead += BATCH_LOOP_OVERHEAD + _callOverhead(transaction.to, transaction.value);
             unchecked {
                 ++i;
             }
@@ -251,7 +235,8 @@ contract Tangem7702GaslessExecutor is
         private
     {
         uint256 gasAfterUserCall = gasleft();
-        uint256 totalGas = startGas - gasAfterUserCall + fee.feeTransferGasLimit + fee.baseGas;
+        uint256 gasUsed = startGas > gasAfterUserCall ? startGas - gasAfterUserCall : 0;
+        uint256 totalGas = gasUsed + fee.feeTransferGasLimit + fee.baseGas;
         uint256 weiCost = totalGas * tx.gasprice;
 
         // Add L1 data fee for L2 networks
@@ -270,7 +255,7 @@ contract Tangem7702GaslessExecutor is
         _feeTransfer(fee.feeToken, fee.feeReceiver, feeAmount);
 
         uint256 gasAfterTransfer = gasleft();
-        uint256 feeTransferGasUsed = gasBeforeTransfer - gasAfterTransfer;
+        uint256 feeTransferGasUsed = gasBeforeTransfer > gasAfterTransfer ? gasBeforeTransfer - gasAfterTransfer : 0;
 
         bool feeTransferGasLimitExceeded = feeTransferGasUsed > fee.feeTransferGasLimit;
         if (forced) {
