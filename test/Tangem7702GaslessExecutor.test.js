@@ -55,7 +55,7 @@ const BASE_GAS_AFTER_CALL_DEFAULT = 8000n;
 const BASE_GAS_AFTER_CALL_OP = 18000n;
 
 // Mirrors IGasOverhead.CallGasCosts with Ethereum values after Glamsterdam.
-const CALL_GAS_COSTS = { coldAccountSurcharge: 3000n, valueTransferCost: 11300n, newAccountCost: 183600n };
+const CALL_GAS_COSTS = { coldAccountAccessCost: 3000n, valueTransferCost: 11300n, newAccountCost: 183600n };
 
 // Outer gas limit of the call reserve tests and a call cost that does not fit into it.
 const RESERVE_TEST_GAS_LIMIT = 1_000_000n;
@@ -65,8 +65,9 @@ const HIGH_CALL_GAS_COST = 3_000_000n;
 const LARGE_CALL_GAS_LIMIT = 6_300_000n;
 const WITHHELD_GAS_SHARE = LARGE_CALL_GAS_LIMIT / 63n;
 
-// Cold account access cost of the test EVM (Osaka).
-const COLD_ACCOUNT_ACCESS_COST = 2600n;
+// Account access costs of the test EVM (Osaka).
+const OSAKA_COLD_ACCOUNT_ACCESS = 2600n;
+const OSAKA_WARM_ACCESS = 100n;
 
 async function deployExecutorFixture() {
   return deployExecutor({
@@ -112,12 +113,12 @@ async function deployHighReserveExecutorFixture() {
 }
 
 // Each fixture raises one call cost above RESERVE_TEST_GAS_LIMIT to show when it is reserved.
-async function deployHighColdSurchargeExecutorFixture() {
+async function deployHighColdAccessCostExecutorFixture() {
   return deployExecutor({
     executorSignerIndex: 7,
     baseGasAfterCall: BASE_GAS_AFTER_CALL_DEFAULT,
     l1FeeMode: L1_FEE_MODE.None,
-    callGasCosts: { ...CALL_GAS_COSTS, coldAccountSurcharge: HIGH_CALL_GAS_COST },
+    callGasCosts: { ...CALL_GAS_COSTS, coldAccountAccessCost: HIGH_CALL_GAS_COST },
   });
 }
 
@@ -1768,17 +1769,14 @@ describe("Tangem7702GaslessExecutor", function () {
     const gasAfterLoop = loopGasLog.args.gasAfterLoop;
     const totalLoopGas = gasBeforeLoop - gasAfterLoop;
 
-    // Per-iteration gas includes: loop body overhead + gas consumed by receive() inside subcall.
-    // receive() consumes ~16 gas inside the subcall (covered by totalGasLimit in real usage).
-    // The BATCH_LOOP_OVERHEAD constant (1200) covers the overhead portion alone.
-    // Expected measurement: ~1216 gas (1200 overhead + ~16 receive() body).
-    const perIteration = totalLoopGas / iterations;
+    // Per-iteration gas = loop body + warm CALL access + receive() body (~16 gas inside the subcall,
+    // covered by totalGasLimit in real usage). Expected: ~1216 gas (~1100 + 100 + ~16).
+    // BATCH_LOOP_OVERHEAD (1200) covers the loop body alone: _callOverhead reserves the CALL access.
+    const loopBodyGas = totalLoopGas / iterations - OSAKA_WARM_ACCESS;
 
-    // Assert the measured per-iteration cost is in a valid range around BATCH_LOOP_OVERHEAD (1200).
-    // Lower bound: overhead shouldn't drop below 1100 without a code change needing review.
-    // Upper bound: overhead + minimal subcall cost shouldn't exceed 1300.
-    expect(perIteration).to.be.greaterThanOrEqual(1100n);
-    expect(perIteration).to.be.lessThanOrEqual(1300n);
+    // Lower bound: the loop body shouldn't drop below 1000 without a code change needing review.
+    expect(loopBodyGas).to.be.greaterThanOrEqual(1000n);
+    expect(loopBodyGas).to.be.lessThanOrEqual(1200n);
   });
 
   describe("ERC-1271 isValidSignature", function () {
@@ -2257,7 +2255,7 @@ describe("Tangem7702GaslessExecutor", function () {
     const arbitrumTotalGas = await totalGasFor(deployArbitrumExecutorFixture);
 
     // The oracle is cold in the measured transaction.
-    expect(arbitrumTotalGas - totalGas).to.be.greaterThanOrEqual(COLD_ACCOUNT_ACCESS_COST);
+    expect(arbitrumTotalGas - totalGas).to.be.greaterThanOrEqual(OSAKA_COLD_ACCOUNT_ACCESS);
   });
 
   it("Adds ArbGasInfo L1 fee to the fee amount on Arbitrum", async function () {
@@ -2454,7 +2452,7 @@ describe("Tangem7702GaslessExecutor", function () {
     const l1 = await networkHelpers.loadFixture(deployExecutorFixture);
     expect(await l1.executor.BASE_GAS_AFTER_CALL()).to.equal(BASE_GAS_AFTER_CALL_DEFAULT);
     expect(await l1.executor.L1_FEE_MODE()).to.equal(BigInt(L1_FEE_MODE.None));
-    expect(await l1.executor.COLD_ACCOUNT_SURCHARGE()).to.equal(CALL_GAS_COSTS.coldAccountSurcharge);
+    expect(await l1.executor.COLD_ACCOUNT_ACCESS_COST()).to.equal(CALL_GAS_COSTS.coldAccountAccessCost);
     expect(await l1.executor.VALUE_TRANSFER_COST()).to.equal(CALL_GAS_COSTS.valueTransferCost);
     expect(await l1.executor.NEW_ACCOUNT_COST()).to.equal(CALL_GAS_COSTS.newAccountCost);
 
@@ -2500,8 +2498,8 @@ describe("Tangem7702GaslessExecutor", function () {
     expect(await executor.nonce()).to.equal(0n);
   });
 
-  it("Reserves COLD_ACCOUNT_SURCHARGE for a single call", async function () {
-    const fixture = await networkHelpers.loadFixture(deployHighColdSurchargeExecutorFixture);
+  it("Reserves COLD_ACCOUNT_ACCESS_COST for a single call", async function () {
+    const fixture = await networkHelpers.loadFixture(deployHighColdAccessCostExecutorFixture);
     const { executor, target } = fixture;
 
     await expect(executeReserveTestCall(fixture, { to: await target.getAddress(), value: 0n }))
@@ -2537,8 +2535,8 @@ describe("Tangem7702GaslessExecutor", function () {
       .to.be.revertedWithCustomError(executor, "InsufficientGas");
   });
 
-  it("Reserves COLD_ACCOUNT_SURCHARGE for every batch call", async function () {
-    const fixture = await networkHelpers.loadFixture(deployHighColdSurchargeExecutorFixture);
+  it("Reserves COLD_ACCOUNT_ACCESS_COST for every batch call", async function () {
+    const fixture = await networkHelpers.loadFixture(deployHighColdAccessCostExecutorFixture);
     const { executor, target } = fixture;
     const to = await target.getAddress();
 

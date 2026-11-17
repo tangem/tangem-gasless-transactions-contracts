@@ -9,9 +9,9 @@ interface IGasOverhead {
         OpStack
     }
 
-    /// @notice Extra gas a CALL charges the caller, set per network fork.
+    /// @notice Gas a CALL charges the caller, set per network fork.
     struct CallGasCosts {
-        uint256 coldAccountSurcharge;
+        uint256 coldAccountAccessCost;
         uint256 valueTransferCost;
         uint256 newAccountCost;
     }
