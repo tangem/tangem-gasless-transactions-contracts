@@ -293,8 +293,8 @@ function signBothParities(signingKey) {
 async function deployErc1271Fixture() {
   const [deployer] = await ethers.getSigners();
 
-  const ExecutorImpl = await ethers.getContractFactory("Tangem7702GaslessExecutorL1", deployer);
-  const impl = await ExecutorImpl.deploy();
+  const ExecutorImpl = await ethers.getContractFactory("Tangem7702GaslessExecutor", deployer);
+  const impl = await ExecutorImpl.deploy(BASE_GAS_AFTER_CALL_DEFAULT, L1_FEE_MODE.None, CALL_GAS_COSTS);
   await impl.waitForDeployment();
 
   // Use a known key so tests can sign raw hashes, and install the executor code at its address.
