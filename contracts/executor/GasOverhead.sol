@@ -55,14 +55,7 @@ abstract contract GasOverhead is IGasOverhead {
         NEW_ACCOUNT_COST = callGasCosts_.newAccountCost;
         L1_FEE_MODE = l1FeeMode_;
 
-        if (l1FeeMode_ != L1FeeMode.None) {
-            address oracle = l1FeeMode_ == L1FeeMode.Arbitrum ? address(ARB_GAS_INFO) : address(OP_GAS_PRICE_ORACLE);
-
-            require(oracle.code.length != 0, L1FeeOracleNotDeployed(oracle));
-
-            // Probe call: reverts if the oracle has another interface
-            _getL1Fee();
-        }
+        _checkL1FeeOracle();
     }
 
     /// @notice Access and value gas of a CALL to `to` with `value`, assuming `to` is cold.
@@ -98,5 +91,17 @@ abstract contract GasOverhead is IGasOverhead {
         }
 
         return 0;
+    }
+
+    /// @notice Reverts if the oracle of `L1_FEE_MODE` is missing or has another interface.
+    function _checkL1FeeOracle() private view {
+        if (L1_FEE_MODE == L1FeeMode.None) return;
+
+        address oracle = L1_FEE_MODE == L1FeeMode.Arbitrum ? address(ARB_GAS_INFO) : address(OP_GAS_PRICE_ORACLE);
+
+        require(oracle.code.length != 0, L1FeeOracleNotDeployed(oracle));
+
+        // Probe call: reverts if the oracle has another interface
+        _getL1Fee();
     }
 }
