@@ -9,14 +9,19 @@ interface IGasOverhead {
         OpStack
     }
 
+    /// @notice Extra gas a CALL charges the caller, set per network fork.
+    struct CallGasCosts {
+        uint256 coldAccountSurcharge;
+        uint256 valueTransferCost;
+        uint256 newAccountCost;
+    }
+
+    /// @notice Thrown when `baseGasAfterCall` is zero.
     error ZeroBaseGasAfterCall();
 
-    /// @param oracle Oracle address without code.
+    /// @notice Thrown when any call gas cost is zero.
+    error ZeroCallGasCost();
+
+    /// @notice Thrown when the selected L1 fee oracle has no code.
     error L1FeeOracleNotDeployed(address oracle);
-
-    /// @notice Gas reserved for everything after the user call, except the fee transfer.
-    function BASE_GAS_AFTER_CALL() external view returns (uint256);
-
-    /// @notice L1 data fee source set at deployment.
-    function L1_FEE_MODE() external view returns (L1FeeMode);
 }

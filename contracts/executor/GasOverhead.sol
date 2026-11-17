@@ -11,41 +11,68 @@ interface IGasPriceOracle {
     function getL1FeeUpperBound(uint256 _unsignedTxSize) external view returns (uint256);
 }
 
-/// @title Post-call gas reserve and L1 data fee for the configured chain type
+/// @title Gas reserves and L1 data fee for the configured chain type
 abstract contract GasOverhead is IGasOverhead {
     IArbGasInfo private constant ARB_GAS_INFO = IArbGasInfo(0x000000000000000000000000000000000000006C);
-
-    // Requires the Fjord upgrade
     IGasPriceOracle private constant OP_GAS_PRICE_ORACLE = IGasPriceOracle(0x420000000000000000000000000000000000000F);
 
-    // Estimated size of the non-data transaction fields
+    /// @dev Estimated size of the non-data transaction fields
     uint256 private constant OP_TX_OVERHEAD = 80;
 
-    // Extra `executor` argument of the EntryPoint call
+    /// @dev Extra `executor` argument of the EntryPoint call
     uint256 private constant ENTRY_POINT_OVERHEAD = 32;
 
-    /// @inheritdoc IGasOverhead
+    /// @notice Gas reserved for everything after the user call, except the fee transfer.
     uint256 public immutable BASE_GAS_AFTER_CALL;
 
-    /// @inheritdoc IGasOverhead
+    /// @notice Extra gas of a CALL to a cold address.
+    uint256 public immutable COLD_ACCOUNT_SURCHARGE;
+
+    /// @notice Extra gas of a CALL with value.
+    uint256 public immutable VALUE_TRANSFER_COST;
+
+    /// @notice Extra gas of a CALL with value to a new account.
+    uint256 public immutable NEW_ACCOUNT_COST;
+
+    /// @notice L1 data fee source set at deployment.
     L1FeeMode public immutable L1_FEE_MODE;
 
-    /// @dev Reverts on a zero reserve or if the selected oracle is missing or has another interface.
-    constructor(uint256 baseGasAfterCall_, L1FeeMode l1FeeMode_) {
+    /// @dev Reverts on zero gas values or if the selected oracle is missing or has another interface.
+    constructor(uint256 baseGasAfterCall_, L1FeeMode l1FeeMode_, CallGasCosts memory callGasCosts_) {
         require(baseGasAfterCall_ != 0, ZeroBaseGasAfterCall());
+        require(
+            callGasCosts_.coldAccountSurcharge != 0 && callGasCosts_.valueTransferCost != 0
+                && callGasCosts_.newAccountCost != 0,
+            ZeroCallGasCost()
+        );
 
         BASE_GAS_AFTER_CALL = baseGasAfterCall_;
+        COLD_ACCOUNT_SURCHARGE = callGasCosts_.coldAccountSurcharge;
+        VALUE_TRANSFER_COST = callGasCosts_.valueTransferCost;
+        NEW_ACCOUNT_COST = callGasCosts_.newAccountCost;
         L1_FEE_MODE = l1FeeMode_;
 
         if (l1FeeMode_ != L1FeeMode.None) {
-            address oracle = l1FeeMode_ == L1FeeMode.Arbitrum
-                ? address(ARB_GAS_INFO)
-                : address(OP_GAS_PRICE_ORACLE);
+            address oracle = l1FeeMode_ == L1FeeMode.Arbitrum ? address(ARB_GAS_INFO) : address(OP_GAS_PRICE_ORACLE);
 
             require(oracle.code.length != 0, L1FeeOracleNotDeployed(oracle));
 
             // Probe call: reverts if the oracle has another interface
             _getL1Fee();
+        }
+    }
+
+    /// @notice Extra gas of a CALL to `to` with `value`, assuming `to` is cold.
+    /// @dev Zero codehash means the transfer creates the account.
+    function _callOverhead(address to, uint256 value) internal view returns (uint256 overhead) {
+        overhead = COLD_ACCOUNT_SURCHARGE;
+
+        if (value > 0) {
+            overhead += VALUE_TRANSFER_COST;
+
+            if (to.codehash == bytes32(0)) {
+                overhead += NEW_ACCOUNT_COST;
+            }
         }
     }
 
