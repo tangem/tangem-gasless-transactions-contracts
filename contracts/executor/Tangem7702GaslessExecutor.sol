@@ -231,8 +231,7 @@ contract Tangem7702GaslessExecutor is
     {
         uint256 l1Fee = _getL1Fee();
 
-        uint256 gasNow = gasleft();
-        uint256 gasUsed = startGas > gasNow ? startGas - gasNow : 0;
+        uint256 gasUsed = startGas - gasleft();
         uint256 totalGas = gasUsed + _calldataGas() + fee.feeTransferGasLimit + fee.baseGas;
         uint256 weiCost = totalGas * tx.gasprice + l1Fee;
 
