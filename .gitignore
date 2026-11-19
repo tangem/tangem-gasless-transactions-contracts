@@ -1,19 +1,31 @@
-artifacts
-cache
 node_modules
-coverage
 .env
 .DS_Store
+.vscode
 
 # Hardhat files
 /cache
 /artifacts
 
+# foundry
+/foundry-artifacts
+
 # solidity-coverage files
 /coverage
-/coverage.json
+lcov.info
 
 # Exporters files
-abi
-bin
-types
+/abi
+/bin
+
+# Tenderly
+/deployments
+
+# Pashov skill
+.solidity-auditor/
+x-ray/
+.audit*
+
+# Docs
+/docs/
+/specs/
